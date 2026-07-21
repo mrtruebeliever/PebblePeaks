@@ -1,0 +1,24 @@
+{
+  "name": "PebblePeaks",
+  "author": "mrtruebeliever",
+  "version": "1.0.0",
+  "license": "MIT",
+  "keywords": ["pebble-app"],
+  "private": true,
+  "dependencies": {},
+  "pebble": {
+    "displayName": "Pebble Peaks",
+    "uuid": "14d4aca6-49dc-4d88-99e7-502b27a96593",
+    "sdkVersion": "3",
+    "enableMultiJS": false,
+    "targetPlatforms": [
+      "emery"
+    ],
+    "watchapp": {
+      "watchface": false
+    },
+    "resources": {
+      "media": []
+    }
+  }
+}
