@@ -32,18 +32,53 @@ static const int8_t REACH_FOR_GAP[11] = { 27, 27, 27, 25, 25, 25, 23, 23, 22, 22
 // World-coordinate ledges (y grows downward, same convention as before,
 // just no longer a fixed compile-time list — floors are generated ahead
 // of the camera and recycled once they scroll off the bottom).
+typedef enum { LEDGE_NORMAL, LEDGE_CRUMBLE, LEDGE_ICE } LedgeType;
+
 typedef struct {
   int16_t x, y, w;   // w == 0 means the slot is free
+  uint8_t type;       // LedgeType
+  int16_t crumble_ticks; // -1 = not yet landed on; counts down to 0 after landing
 } Ledge;
 
 #define MAX_LEDGES 24
 static Ledge s_ledges[MAX_LEDGES];
 static int32_t s_gen_top_y;   // world y of the highest floor generated so far
 static int16_t s_gen_ref_x;   // last floor's center x (reachability anchor)
+static int16_t s_standing_ledge_idx = -1; // index into s_ledges, -1 if airborne
+static int8_t s_ice_dir;      // slide direction while standing on an ice ledge
+
+#define SPECIAL_LEDGE_MIN_M 150 // crumble/ice ledges start appearing above this height
+#define CRUMBLE_TICKS 24        // 0.8s @ 30fps before a landed-on crumble ledge vanishes
+#define ICE_SLIDE_FP 384        // 1.5 px/tick in 8.8 fixed
 
 #define MIST_GAP_START 60      // px below climber's start the mist begins
 #define MIST_BASE_SPEED_FP 90  // 0.35 px/tick in 8.8 fixed
 #define MIST_MAX_SCALE_FP 878  // caps speed at 1.2 px/tick (878/256 ~= 3.43x)
+
+#define MAX_GEMS 16
+typedef struct {
+  int16_t x, y;   // world coords, whole px
+  uint8_t color_idx;
+  bool active;
+} Gem;
+static Gem s_gems[MAX_GEMS];
+static int32_t s_gems_run;    // collected this run
+static int32_t s_gems_total;  // persisted lifetime total
+
+#define MAX_ROCKS 6
+#define ROCK_MIN_M 300          // falling rocks start appearing above this height
+#define ROCK_SPEED_FP 640       // 2.5 px/tick in 8.8 fixed
+#define ROCK_R 5
+typedef struct {
+  int32_t x_fp, y_fp;
+  bool active;
+} Rock;
+static Rock s_rocks[MAX_ROCKS];
+static int16_t s_rock_cooldown;
+static int16_t s_invuln_ticks;
+
+#define PK_GEMS 1
+#define PK_BEST 2
 
 typedef enum { ST_TITLE, ST_PLAYING, ST_PAUSED, ST_GAMEOVER } GameState;
 
@@ -62,6 +97,7 @@ static int32_t s_cam_y;        // world y shown at screen row 0 (only ever decre
 static int32_t s_base_y;       // world y of the starting platform
 static int32_t s_height_m;     // current climber height in meters (for HUD/difficulty)
 static int32_t s_best_height_m;// highest height reached this run (shown on game over)
+static int32_t s_alltime_best_m;// persisted all-time record
 static int32_t s_mist_top_fp;  // world y of the mist surface, 8.8 fixed
 static uint16_t s_wave_phase;
 static int16_t s_lock_ticks;   // input-lock countdown after game over
@@ -106,6 +142,40 @@ static Ledge *find_free_ledge_slot(void) {
   return NULL;
 }
 
+static void save_progress(void) {
+  persist_write_int(PK_GEMS, s_gems_total);
+  persist_write_int(PK_BEST, s_alltime_best_m);
+}
+
+static void load_progress(void) {
+  s_gems_total = persist_read_int(PK_GEMS);
+  s_alltime_best_m = persist_read_int(PK_BEST);
+}
+
+// Crumble/ice ledges start appearing above SPECIAL_LEDGE_MIN_M, growing more
+// frequent with height (capped at 30% so a normal, safe path always exists).
+static uint8_t pick_ledge_type(int32_t world_y) {
+  int32_t m = height_from_world_y(world_y);
+  if (m < SPECIAL_LEDGE_MIN_M) return LEDGE_NORMAL;
+  int32_t chance = (m - SPECIAL_LEDGE_MIN_M) / 10;
+  if (chance > 30) chance = 30;
+  if ((int32_t)(rand() % 100) >= chance) return LEDGE_NORMAL;
+  return (rand() % 2) ? LEDGE_ICE : LEDGE_CRUMBLE;
+}
+
+static void maybe_spawn_gem(int16_t cx, int16_t ledge_y) {
+  if (rand() % 100 >= 55) return;
+  for (int i = 0; i < MAX_GEMS; i++) {
+    if (!s_gems[i].active) {
+      s_gems[i].active = true;
+      s_gems[i].x = cx;
+      s_gems[i].y = (int16_t)(ledge_y - 16);
+      s_gems[i].color_idx = (uint8_t)(rand() % 4);
+      return;
+    }
+  }
+}
+
 // Generates the next floor above s_gen_top_y. The center is always within
 // one fixed jump's reach of the previous floor's reference ledge, so the
 // staircase never presents an unreachable gap.
@@ -134,6 +204,9 @@ static void generate_floor(void) {
     slot->x = (int16_t)(center - half_w);
     slot->y = (int16_t)next_y;
     slot->w = width;
+    slot->type = pick_ledge_type(next_y);
+    slot->crumble_ticks = -1;
+    maybe_spawn_gem((int16_t)center, (int16_t)next_y);
   }
   // Occasional bonus ledge on the same floor, purely decorative — it does
   // not become the reachability anchor, so the main staircase stays intact
@@ -148,6 +221,9 @@ static void generate_floor(void) {
         slot2->x = (int16_t)(center2 - half_w);
         slot2->y = (int16_t)next_y;
         slot2->w = width;
+        slot2->type = pick_ledge_type(next_y);
+        slot2->crumble_ticks = -1;
+        maybe_spawn_gem((int16_t)center2, (int16_t)next_y);
       }
     }
   }
@@ -179,16 +255,24 @@ static void start_run(void) {
   s_height_m = 0;
   s_best_height_m = 0;
   s_wave_phase = 0;
+  s_gems_run = 0;
+  s_rock_cooldown = 0;
+  s_invuln_ticks = 0;
+  for (int i = 0; i < MAX_GEMS; i++) s_gems[i].active = false;
+  for (int i = 0; i < MAX_ROCKS; i++) s_rocks[i].active = false;
 
   for (int i = 0; i < MAX_LEDGES; i++) s_ledges[i].w = 0;
   s_ledges[0].x = 0;
   s_ledges[0].y = (int16_t)s_base_y;
   s_ledges[0].w = s_bounds.size.w;
+  s_ledges[0].type = LEDGE_NORMAL;
+  s_ledges[0].crumble_ticks = -1;
   s_gen_top_y = s_base_y;
   s_gen_ref_x = (int16_t)(s_bounds.size.w / 2);
   ensure_floors_generated();
 
   place_on_ledge(&s_ledges[0]);
+  s_standing_ledge_idx = 0;
   s_mist_top_fp = (int32_t)(s_base_y + MIST_GAP_START) << FP;
 
   s_state = ST_PLAYING;
@@ -200,6 +284,9 @@ static void start_run(void) {
 static void trigger_game_over(void) {
   s_state = ST_GAMEOVER;
   s_lock_ticks = 30; // 1s @ 30fps
+  s_gems_total += s_gems_run;
+  if (s_best_height_m > s_alltime_best_m) s_alltime_best_m = s_best_height_m;
+  save_progress();
   stop_timer();
   s_timer = app_timer_register(TICK_MS, game_tick, NULL);
   vibes_long_pulse();
@@ -214,6 +301,7 @@ static void try_jump(int8_t dir) {
   if (s_state != ST_PLAYING || s_airborne) return;
   s_airborne = true;
   s_bounced = false;
+  s_standing_ledge_idx = -1;
   s_vx_fp = (int32_t)dir * JUMP_VX_FP;
   s_vy_fp = JUMP_VY0_FP;
   layer_mark_dirty(s_layer);
@@ -252,8 +340,9 @@ static void game_tick(void *data) {
     if (s_vy_fp > 0) {
       int16_t feet_y = s_climber_y_fp >> FP;
       cx = s_climber_x_fp >> FP;
+      int8_t land_dir = (s_vx_fp >= 0) ? 1 : -1;
       for (int i = 0; i < MAX_LEDGES; i++) {
-        const Ledge *l = &s_ledges[i];
+        Ledge *l = &s_ledges[i];
         if (l->w == 0) continue;
         bool crossed = prev_feet_y <= l->y && feet_y >= l->y;
         bool over_ledge = (cx + CLIMBER_R >= l->x) && (cx - CLIMBER_R <= l->x + l->w);
@@ -262,8 +351,50 @@ static void game_tick(void *data) {
           // place_on_ledge recenters x on the ledge midpoint; nudge it back
           // to the actual landing x so jumps don't visually snap sideways.
           s_climber_x_fp = (int32_t)cx << FP;
+          s_standing_ledge_idx = i;
+          if (l->type == LEDGE_ICE) {
+            s_ice_dir = land_dir;
+          } else if (l->type == LEDGE_CRUMBLE && l->crumble_ticks < 0) {
+            l->crumble_ticks = CRUMBLE_TICKS;
+          }
           break;
         }
+      }
+    }
+  }
+
+  // Ice ledges: keep sliding the climber toward the edge they landed
+  // moving into, until they slide off (and fall) or jump away in time.
+  if (!s_airborne && s_standing_ledge_idx >= 0) {
+    Ledge *sl = &s_ledges[s_standing_ledge_idx];
+    if (sl->w != 0 && sl->type == LEDGE_ICE) {
+      s_climber_x_fp += s_ice_dir * ICE_SLIDE_FP;
+      int16_t cx2 = s_climber_x_fp >> FP;
+      if (cx2 < sl->x || cx2 > sl->x + sl->w) {
+        s_airborne = true;
+        s_bounced = false;
+        s_vx_fp = s_ice_dir * 100;
+        s_vy_fp = 0;
+        s_standing_ledge_idx = -1;
+      }
+    }
+  }
+
+  // Crumble ledges: once landed on, they vanish CRUMBLE_TICKS later
+  // regardless of whether the climber is still standing there.
+  for (int i = 0; i < MAX_LEDGES; i++) {
+    Ledge *l = &s_ledges[i];
+    if (l->w == 0 || l->type != LEDGE_CRUMBLE || l->crumble_ticks < 0) continue;
+    l->crumble_ticks--;
+    if (l->crumble_ticks < 0) {
+      bool climber_here = !s_airborne && s_standing_ledge_idx == i;
+      l->w = 0;
+      if (climber_here) {
+        s_airborne = true;
+        s_bounced = false;
+        s_vx_fp = 0;
+        s_vy_fp = 0;
+        s_standing_ledge_idx = -1;
       }
     }
   }
@@ -281,6 +412,65 @@ static void game_tick(void *data) {
 
   s_height_m = height_from_world_y(s_climber_y_fp >> FP);
   if (s_height_m > s_best_height_m) s_best_height_m = s_height_m;
+
+  // Falling rocks: spawn above the camera from ROCK_MIN_M up, fall straight
+  // down, and knock the climber back into a fall (with brief invulnerability)
+  // on contact — reusing the normal landing logic to catch them below.
+  if (s_rock_cooldown > 0) s_rock_cooldown--;
+  if (s_height_m >= ROCK_MIN_M && s_rock_cooldown == 0) {
+    int32_t chance = 1 + (s_height_m - ROCK_MIN_M) / 60;
+    if (chance > 6) chance = 6;
+    if ((int32_t)(rand() % 100) < chance) {
+      for (int i = 0; i < MAX_ROCKS; i++) {
+        if (!s_rocks[i].active) {
+          s_rocks[i].active = true;
+          s_rocks[i].x_fp = (int32_t)(8 + rand() % (s_bounds.size.w - 16)) << FP;
+          s_rocks[i].y_fp = (int32_t)(s_cam_y - 20) << FP;
+          s_rock_cooldown = 40;
+          break;
+        }
+      }
+    }
+  }
+  if (s_invuln_ticks > 0) s_invuln_ticks--;
+  for (int i = 0; i < MAX_ROCKS; i++) {
+    Rock *r = &s_rocks[i];
+    if (!r->active) continue;
+    r->y_fp += ROCK_SPEED_FP;
+    int32_t ry = r->y_fp >> FP;
+    if (ry - s_cam_y > s_bounds.size.h + 20) { r->active = false; continue; }
+    if (s_invuln_ticks == 0) {
+      int32_t rx = r->x_fp >> FP;
+      int32_t dx = rx - (s_climber_x_fp >> FP);
+      int32_t dy = ry - (s_climber_y_fp >> FP);
+      int32_t rr = ROCK_R + CLIMBER_R;
+      if (dx * dx + dy * dy < rr * rr) {
+        r->active = false;
+        s_invuln_ticks = 45;
+        vibes_short_pulse();
+        s_airborne = true;
+        s_bounced = false;
+        s_vx_fp = 0;
+        s_vy_fp = 0;
+        s_standing_ledge_idx = -1;
+      }
+    }
+  }
+
+  // Gems: simple radius collision against the climber's body (a bit above
+  // the feet), collectible whether airborne or standing.
+  for (int i = 0; i < MAX_GEMS; i++) {
+    Gem *g = &s_gems[i];
+    if (!g->active) continue;
+    if (g->y - s_cam_y > s_bounds.size.h + 60) { g->active = false; continue; }
+    int32_t body_y = (s_climber_y_fp >> FP) - 14;
+    int32_t dx = g->x - (s_climber_x_fp >> FP);
+    int32_t dy = g->y - body_y;
+    if (dx * dx + dy * dy < 121) {
+      g->active = false;
+      s_gems_run++;
+    }
+  }
 
   // Mist: rises steadily, accelerating with height, and ends the run the
   // instant it reaches the climber.
@@ -332,8 +522,16 @@ static void draw_ledges(GContext *ctx) {
     if (l->w == 0) continue;
     int16_t sy = (int16_t)(l->y - s_cam_y);
     if (sy < -8 || sy > s_bounds.size.h) continue;
-    GRect r = GRect(l->x, sy, l->w, 8);
-    graphics_context_set_fill_color(ctx, GColorWindsorTan);
+    int16_t sx = l->x;
+    if (l->type == LEDGE_CRUMBLE && l->crumble_ticks >= 0) {
+      // Trembles the whole time it's counting down to vanishing.
+      sx = (int16_t)(sx + ((l->crumble_ticks % 2) ? 1 : -1));
+    }
+    GRect r = GRect(sx, sy, l->w, 8);
+    GColor fill = l->type == LEDGE_ICE ? GColorCeleste
+                : l->type == LEDGE_CRUMBLE ? GColorBulgarianRose
+                : GColorWindsorTan;
+    graphics_context_set_fill_color(ctx, fill);
     graphics_fill_rect(ctx, r, 2, GCornersAll);
     graphics_draw_round_rect(ctx, r, 2);
   }
@@ -382,6 +580,51 @@ static void draw_mountains(GContext *ctx, GRect b) {
   }
 }
 
+static GColor gem_color(uint8_t idx) {
+  switch (idx % 4) {
+    case 0: return GColorMagenta;
+    case 1: return GColorSpringBud;
+    case 2: return GColorChromeYellow;
+    default: return GColorShockingPink;
+  }
+}
+
+static GPoint s_gem_pts[4];
+static GPathInfo s_gem_info = { .num_points = 4, .points = s_gem_pts };
+static GPath *s_gem_path;
+
+static void draw_gems(GContext *ctx, GRect b) {
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  for (int i = 0; i < MAX_GEMS; i++) {
+    const Gem *g = &s_gems[i];
+    if (!g->active) continue;
+    int16_t sy = (int16_t)(g->y - s_cam_y);
+    if (sy < -6 || sy > b.size.h) continue;
+    int16_t sx = g->x;
+    s_gem_pts[0] = GPoint(sx, (int16_t)(sy - 5));
+    s_gem_pts[1] = GPoint((int16_t)(sx + 4), sy);
+    s_gem_pts[2] = GPoint(sx, (int16_t)(sy + 5));
+    s_gem_pts[3] = GPoint((int16_t)(sx - 4), sy);
+    graphics_context_set_fill_color(ctx, gem_color(g->color_idx));
+    gpath_draw_filled(ctx, s_gem_path);
+    gpath_draw_outline(ctx, s_gem_path);
+  }
+}
+
+static void draw_rocks(GContext *ctx, GRect b) {
+  graphics_context_set_fill_color(ctx, GColorDarkGray);
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  for (int i = 0; i < MAX_ROCKS; i++) {
+    const Rock *r = &s_rocks[i];
+    if (!r->active) continue;
+    int16_t sx = (int16_t)(r->x_fp >> FP);
+    int16_t sy = (int16_t)((r->y_fp >> FP) - s_cam_y);
+    if (sy < -ROCK_R || sy > b.size.h + ROCK_R) continue;
+    graphics_fill_circle(ctx, GPoint(sx, sy), ROCK_R);
+    graphics_draw_circle(ctx, GPoint(sx, sy), ROCK_R);
+  }
+}
+
 static void draw_mist(GContext *ctx, GRect b) {
   int16_t top = (int16_t)((s_mist_top_fp >> FP) - s_cam_y);
   if (top >= b.size.h) return;
@@ -424,13 +667,26 @@ static void draw_hud(GContext *ctx, GRect b) {
   int32_t gap = (s_mist_top_fp >> FP) - (s_climber_y_fp >> FP);
   if (gap < 0) gap = 0;
   if (gap > 120) gap = 120;
-  int16_t bar_w = 60, bar_h = 6;
+  int16_t bar_w = 50, bar_h = 6;
   int16_t bar_x = (int16_t)(b.size.w / 2 - bar_w / 2), bar_y = 6;
   graphics_context_set_stroke_color(ctx, GColorWhite);
   graphics_draw_rect(ctx, GRect(bar_x, bar_y, bar_w, bar_h));
   int16_t fill_w = (int16_t)(gap * bar_w / 120);
   graphics_context_set_fill_color(ctx, gap < 30 ? GColorRed : GColorCeleste);
   if (fill_w > 0) graphics_fill_rect(ctx, GRect(bar_x, bar_y, fill_w, bar_h), 0, GCornerNone);
+
+  // Gem count, right-aligned.
+  char gbuf[12];
+  snprintf(gbuf, sizeof(gbuf), "%ld", (long)(s_gems_total + s_gems_run));
+  s_gem_pts[0] = GPoint((int16_t)(b.size.w - 46), 9);
+  s_gem_pts[1] = GPoint((int16_t)(b.size.w - 42), 5);
+  s_gem_pts[2] = GPoint((int16_t)(b.size.w - 38), 9);
+  s_gem_pts[3] = GPoint((int16_t)(b.size.w - 42), 13);
+  graphics_context_set_fill_color(ctx, GColorMagenta);
+  gpath_draw_filled(ctx, s_gem_path);
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, gbuf, s_f14, GRect((int16_t)(b.size.w - 34), 1, 32, 16),
+                     GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 }
 
 static void draw_game(GContext *ctx, GRect b) {
@@ -440,10 +696,15 @@ static void draw_game(GContext *ctx, GRect b) {
   draw_mountains(ctx, b);
 
   draw_ledges(ctx);
+  draw_gems(ctx, b);
+  draw_rocks(ctx, b);
 
-  int16_t cx = s_climber_x_fp >> FP;
-  int16_t feet_y = (int16_t)((s_climber_y_fp >> FP) - s_cam_y);
-  draw_climber(ctx, cx, (int16_t)(feet_y - CLIMBER_SPRITE_H), s_airborne);
+  // Blink the climber while invulnerable, as damage feedback.
+  if (s_invuln_ticks == 0 || (s_invuln_ticks / 3) % 2 == 0) {
+    int16_t cx = s_climber_x_fp >> FP;
+    int16_t feet_y = (int16_t)((s_climber_y_fp >> FP) - s_cam_y);
+    draw_climber(ctx, cx, (int16_t)(feet_y - CLIMBER_SPRITE_H), s_airborne);
+  }
 
   draw_mist(ctx, b);
   draw_hud(ctx, b);
@@ -472,12 +733,14 @@ static void draw_title(GContext *ctx, GRect b) {
 static void draw_gameover(GContext *ctx, GRect b) {
   draw_game(ctx, b);
   graphics_context_set_fill_color(ctx, GColorBlack);
-  graphics_fill_rect(ctx, GRect(0, b.size.h / 2 - 38, b.size.w, 76), 0, GCornerNone);
-  draw_center_text(ctx, "Bevroren!", s_f28b, b.size.h / 2 - 36, 30, b, GColorCeleste);
+  graphics_fill_rect(ctx, GRect(0, b.size.h / 2 - 46, b.size.w, 92), 0, GCornerNone);
+  draw_center_text(ctx, "Bevroren!", s_f28b, b.size.h / 2 - 44, 30, b, GColorCeleste);
   char buf[24];
   snprintf(buf, sizeof(buf), "Hoogste: %ldm", (long)s_best_height_m);
-  draw_center_text(ctx, buf, s_f18b, b.size.h / 2 - 4, 22, b, GColorWhite);
-  draw_center_text(ctx, "SELECT · opnieuw", s_f14, b.size.h / 2 + 20, 18, b, GColorLightGray);
+  draw_center_text(ctx, buf, s_f18b, b.size.h / 2 - 12, 22, b, GColorWhite);
+  snprintf(buf, sizeof(buf), "Edelstenen: %ld", (long)s_gems_run);
+  draw_center_text(ctx, buf, s_f14, b.size.h / 2 + 10, 18, b, GColorCeleste);
+  draw_center_text(ctx, "SELECT · opnieuw", s_f14, b.size.h / 2 + 28, 18, b, GColorLightGray);
 }
 
 static void layer_update(Layer *layer, GContext *ctx) {
@@ -584,10 +847,12 @@ static void window_unload(Window *window) {
 
 static void init(void) {
   srand(time(NULL));
+  load_progress();
   s_f14 = fonts_get_system_font(FONT_KEY_GOTHIC_14);
   s_f18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
   s_f28b = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
   s_mountain_path = gpath_create(&s_mountain_info);
+  s_gem_path = gpath_create(&s_gem_info);
 
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
@@ -601,8 +866,10 @@ static void init(void) {
 
 static void deinit(void) {
   stop_timer();
+  save_progress();
   app_focus_service_unsubscribe();
   gpath_destroy(s_mountain_path);
+  gpath_destroy(s_gem_path);
   window_destroy(s_window);
 }
 
