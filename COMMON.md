@@ -25,6 +25,16 @@ Daarna in package.json: `author: "mrtruebeliever"`, `license: "MIT"`,
 `messageKeys` weghalen (deze spellen zijn offline, geen JS nodig).
 Hernoem `src/c/<Naam>.c` naar `src/c/main.c`.
 
+⚠️ **Verplicht:** ook zonder icoon/afbeeldingen altijd een lege
+`"resources": { "media": [] }` in `package.json`'s `pebble`-object laten
+staan. De nieuwe Core Devices/rePebble-telefoon-app parset `appinfo.json`
+strikt en verwacht een `resources`-veld zonder default — ontbreekt het,
+dan faalt sideloaden op de telefoon met de generieke melding "Error while
+sideloading app" (geen duidelijke foutmelding, en build/emulator merken
+er niets van). Na het toevoegen/wijzigen van deze sleutel altijd eerst
+`pebble clean` vóór de volgende `pebble build`, anders pikt waf de
+appinfo.json-wijziging niet op.
+
 ## Bouwen / draaien / testen
 
 ```bash
@@ -34,6 +44,20 @@ pebble screenshot --emulator emery pad.png     # native 200x228 PNG, ~1s
 ```
 
 - **NOOIT `pebble logs` draaien** — blokkeert voor eeuwig, ook onder `timeout`.
+- **Emulator-onbetrouwbaarheid**: `pebble install`/`pebble screenshot` lopen
+  af en toe vast met een `libpebble2.exceptions.TimeoutError`, soms na een
+  al geslaagde install. Oorzaken tot nu toe gezien: een oud weesproces
+  (`qemu-pebble`) dat een CPU-kern volledig bezet houdt, of de actieve
+  emulator zelf die niet meer reageert (display-probleem — het
+  emulatorvenster is dan niet meer zichtbaar). Herstel: `ps aux | grep -E
+  "qemu|pypkjs"` om te zien welk paar (qemu + pypkjs) actief is/hoort te
+  zijn volgens `/tmp/pb-emulator.json`, en bij twijfel **eerst aan de
+  gebruiker vragen** voor je een proces killt (zeker het proces dat wél in
+  `pb-emulator.json` staat, niet alleen een weesproces) — een `pebble
+  install` daarna start vanzelf een nieuwe instantie. Blijf het niet
+  blind herhalen; als een herstart niet werkt is het waarschijnlijk een
+  probleem aan de gebruikerskant (display/grafische omgeving) dat je zelf
+  niet kan oplossen — meld dat en vraag hoe verder.
 - Knoppen headless: **`PebbleDiver/tools/press.py`** (kopieer naar het nieuwe
   project). Gebruik: `tools/press.py select sleep:400 hold:select:1500 back`.
   Het script praat via de **pypkjs-websocket** (poort uit `/tmp/pb-emulator.json`,
