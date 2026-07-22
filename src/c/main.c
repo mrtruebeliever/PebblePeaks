@@ -812,22 +812,40 @@ static GPoint s_mountain_pts[3];
 static GPathInfo s_mountain_info = { .num_points = 3, .points = s_mountain_pts };
 static GPath *s_mountain_path;
 
-static void draw_mountains(GContext *ctx, GRect b) {
-  // Distant silhouette, scrolling at half camera speed for depth. Reuses a
-  // single heap-allocated GPath (mutating its points) instead of
-  // create/destroy per triangle per frame, to avoid needless heap churn.
-  int32_t par = (-s_cam_y) / 2;
-  graphics_context_set_fill_color(ctx, GColorDukeBlue);
-  int32_t period = 40;
-  int32_t offset = par % period;
+// One filled triangle via the shared 3-point scratch path (no per-frame
+// heap churn from create/destroy).
+static void draw_tri(GContext *ctx, int16_t x0, int16_t y0,
+                     int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
+  s_mountain_pts[0] = GPoint(x0, y0);
+  s_mountain_pts[1] = GPoint(x1, y1);
+  s_mountain_pts[2] = GPoint(x2, y2);
+  gpath_draw_filled(ctx, s_mountain_path);
+}
+
+// One layer of the mountain range: a jagged ridgeline of triangular peaks
+// tiling the width, bases at the screen bottom. `par` is a horizontal
+// parallax offset (larger divisor = farther/slower); `seed` staggers the
+// peak heights so stacked layers don't line up.
+static void draw_mountain_layer(GContext *ctx, GRect b, GColor color,
+                                int32_t par, int32_t period,
+                                int16_t min_h, int16_t var, int seed) {
+  graphics_context_set_fill_color(ctx, color);
+  int32_t offset = ((par % period) + period) % period;
   for (int32_t px = -offset - period; px < b.size.w + period; px += period) {
     int idx = (int)((px + offset) / period);
-    int16_t peak_h = 16 + (int16_t)((idx * 29) % 14); // 16-30px
-    s_mountain_pts[0] = GPoint((int16_t)px, (int16_t)b.size.h);
-    s_mountain_pts[1] = GPoint((int16_t)(px + period / 2), (int16_t)(b.size.h - peak_h));
-    s_mountain_pts[2] = GPoint((int16_t)(px + period), (int16_t)b.size.h);
-    gpath_draw_filled(ctx, s_mountain_path);
+    int16_t peak_h = min_h + (int16_t)((((idx * 29 + seed) % var) + var) % var);
+    draw_tri(ctx, (int16_t)px, (int16_t)b.size.h,
+             (int16_t)(px + period / 2), (int16_t)(b.size.h - peak_h),
+             (int16_t)(px + period), (int16_t)b.size.h);
   }
+}
+
+static void draw_mountains(GContext *ctx, GRect b) {
+  // Two parallax layers for depth: a taller, slower, lighter far range
+  // behind a darker, faster near range. Both stay dark enough to read
+  // against the low-altitude sky; up high the sky darkens to meet them.
+  draw_mountain_layer(ctx, b, GColorCobaltBlue, (-s_cam_y) / 3, 60, 28, 22, 11);
+  draw_mountain_layer(ctx, b, GColorOxfordBlue, (-s_cam_y) / 2, 38, 16, 16, 0);
 }
 
 static GColor gem_color(uint8_t idx) {
@@ -970,21 +988,42 @@ static void draw_center_text(GContext *ctx, const char *text, GFont font,
                      GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
 
+// Static mountain range behind the title: a far lighter range and a near
+// dark range whose broad central peak the climber is planted on.
+static void draw_title_range(GContext *ctx, GRect b) {
+  int16_t base = b.size.h;
+  // Far range (lighter, behind): taller, sparser peaks poking up between
+  // the near ridge.
+  graphics_context_set_fill_color(ctx, GColorCobaltBlue);
+  draw_tri(ctx, -20, base, 50, 122, 120, base);
+  draw_tri(ctx, 90, base, 158, 116, 236, base);
+  // Near range (darker, front): an overlapping ridge whose broad central
+  // hero peak (apex y120) the climber is planted on.
+  graphics_context_set_fill_color(ctx, GColorOxfordBlue);
+  draw_tri(ctx, -30, base, 26, 158, 78, base);
+  draw_tri(ctx, 108, base, 168, 150, 232, base);
+  draw_tri(ctx, 30, base, 100, 120, 172, base);
+}
+
 static void draw_title(GContext *ctx, GRect b) {
   graphics_context_set_fill_color(ctx, GColorVividCerulean);
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_fill_color(ctx, GColorCeleste);
   graphics_fill_rect(ctx, GRect(0, 0, b.size.w, 4), 0, GCornerNone);
+  draw_title_range(ctx, b);
 
   draw_center_text(ctx, S(S_TITLE), s_f28b, 14, 70, b, GColorWhite);
   // Once the summit has been reached, the trophy flag stands by the title.
   if (s_summit_reached) draw_flag(ctx, (int16_t)(b.size.w / 2 + 78), 42);
-  draw_climber(ctx, b.size.w / 2, 88, false);
+  // Planted on the hero peak: sprite top_y so the feet (top_y+27) meet the
+  // apex at y120.
+  draw_climber(ctx, b.size.w / 2, 93, false);
 
-  // Records: all-time best height and the gem wallet.
+  // Records: all-time best height and the gem wallet (light text so it
+  // stays legible over the dark near range).
   char buf[28];
   snprintf(buf, sizeof(buf), S(S_RECORD), (long)s_alltime_best_m);
-  draw_center_text(ctx, buf, s_f18b, 118, 22, b, GColorOxfordBlue);
+  draw_center_text(ctx, buf, s_f18b, 118, 22, b, GColorWhite);
   snprintf(buf, sizeof(buf), "%ld", (long)s_gems_total);
   int16_t gx = (int16_t)(b.size.w / 2 - 14);
   s_gem_pts[0] = GPoint(gx, 145);
@@ -998,7 +1037,7 @@ static void draw_title(GContext *ctx, GRect b) {
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 
   draw_center_text(ctx, S(S_HINT_CLIMB), s_f18b, 164, 24, b, GColorWhite);
-  draw_center_text(ctx, S(S_HINT_SHOP), s_f14, 188, 20, b, GColorOxfordBlue);
+  draw_center_text(ctx, S(S_HINT_SHOP), s_f14, 188, 20, b, GColorPastelYellow);
 }
 
 static void draw_shop(GContext *ctx, GRect b) {
