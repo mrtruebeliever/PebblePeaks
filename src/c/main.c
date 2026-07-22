@@ -86,9 +86,6 @@ static void pick_language(void) {
   else s_tr = TR[L_EN];
 }
 
-// Preview offset (metres) added to the on-screen snow-line altitude, for
-// screenshotting the snowy zone without climbing there. 0 in shipping code.
-#define SNOW_DEMO 0
 
 #define TICK_MS 33            // ~30 fps
 #define FP 8                  // 8.8 fixed point
@@ -759,6 +756,13 @@ static void draw_ledges(GContext *ctx) {
                 : GColorWindsorTan;
     graphics_context_set_fill_color(ctx, fill);
     graphics_fill_rect(ctx, r, 2, GCornersAll);
+    // Sunlit top edge — lifts the ledge off the similar-brown mountain.
+    if (l->type == LEDGE_NORMAL) {
+      graphics_context_set_stroke_color(ctx, GColorRajah);
+      graphics_draw_line(ctx, GPoint((int16_t)(sx + 1), (int16_t)(sy + 1)),
+                         GPoint((int16_t)(sx + l->w - 2), (int16_t)(sy + 1)));
+    }
+    graphics_context_set_stroke_color(ctx, GColorBlack);
     graphics_draw_round_rect(ctx, r, 2);
   }
 }
@@ -820,67 +824,39 @@ static void draw_tri(GContext *ctx, int16_t x0, int16_t y0,
 }
 
 
-// The mountain the climber scales: a stone cliff face that scrolls
-// vertically with the camera, so you feel yourself rising against it. The
-// snow line sits at a fixed world altitude — bare rock low down turns to
-// deepening snow the higher you climb, and you pass up through it.
-//
-// The Pebble only shows 2 bits/channel (64 colours), so there are no subtle
-// greys to shade with — detail comes from *shape*: every stone gets a light
-// top-left bevel and a dark bottom-right crevice, giving chiselled blocks
-// instead of a field of random holes.
-static void draw_bg_cliff(GContext *ctx, GRect b) {
-  const int32_t cell = 18;
-  int32_t top = s_cam_y;                        // world y at screen row 0
-  int32_t first = (top >= 0 ? top / cell : top / cell - 1) * cell;
-  for (int32_t wy = first - cell; wy < top + b.size.h + cell; wy += cell) {
-    int row = (int)(wy / cell);
-    int16_t sy = (int16_t)(wy - top);
-    // Altitude of this stone course → snow depth 0..100 (line ~140–520 m).
-    int32_t hm = (s_base_y - wy) / 12 + SNOW_DEMO;
-    int32_t snow = hm <= 140 ? 0 : hm >= 520 ? 100 : (hm - 140) * 100 / 380;
-    for (int col = -1; col <= b.size.w / cell + 1; col++) {
-      // Stagger every other course for a stacked-masonry bond.
-      int16_t bx = (int16_t)(col * cell - ((row & 1) ? cell / 2 : 0));
-      uint32_t hh = ((uint32_t)row * 2654435761u) ^ ((uint32_t)(col + 7) * 40503u);
-      hh ^= hh >> 13; hh *= 0x9e3779b1u; hh ^= hh >> 15;
-      int v = (int)(hh & 31);                   // 0..31 stable per stone
-      // Snow arrives as whole stones turning white, their share of the wall
-      // growing with altitude — patches of snow clinging to the rock rather
-      // than straight horizontal bands.
-      bool snowy = v < (snow * 32 / 100);
-      // Body: snowy stone white; otherwise mostly dark rock, some lighter.
-      graphics_context_set_fill_color(ctx, snowy ? GColorWhite
-                                       : (v < 6) ? GColorLightGray : GColorDarkGray);
-      graphics_fill_rect(ctx, GRect(bx, sy, (int16_t)cell, (int16_t)cell), 0, GCornerNone);
-      // Chiselled bevel: light top+left, dark crevice bottom+right. Snow
-      // stones use softer edges so they read as snow, not stone.
-      graphics_context_set_stroke_color(ctx, snowy ? GColorWhite : GColorLightGray);
-      graphics_draw_line(ctx, GPoint(bx, sy), GPoint((int16_t)(bx + cell - 1), sy));
-      graphics_draw_line(ctx, GPoint(bx, sy), GPoint(bx, (int16_t)(sy + cell - 1)));
-      graphics_context_set_stroke_color(ctx, snowy ? GColorLightGray : GColorBlack);
-      graphics_draw_line(ctx, GPoint(bx, (int16_t)(sy + cell - 1)),
-                         GPoint((int16_t)(bx + cell - 1), (int16_t)(sy + cell - 1)));
-      graphics_draw_line(ctx, GPoint((int16_t)(bx + cell - 1), sy),
-                         GPoint((int16_t)(bx + cell - 1), (int16_t)(sy + cell - 1)));
-      // A hairline crack on the odd rock stone, for texture.
-      if (!snowy && v == 3) {
-        graphics_context_set_stroke_color(ctx, GColorBlack);
-        graphics_draw_line(ctx, GPoint((int16_t)(bx + cell / 2), sy),
-                           GPoint((int16_t)(bx + cell / 3), (int16_t)(sy + cell - 1)));
-      }
-      // Bare rock inside the snow band still catches a dusting on its top.
-      if (!snowy && snow > 8) {
-        int16_t cap = (int16_t)(2 + snow / 40);   // 2..4 px
-        graphics_context_set_fill_color(ctx, GColorWhite);
-        graphics_fill_rect(ctx, GRect(bx, sy, (int16_t)cell, cap), 0, GCornerNone);
-      }
-    }
+// Parallax mountain layers (loaded bitmaps: snow-capped grey far range, warm
+// brown massif, dark foreground crags). Each is a 200xIH tile, transparent
+// above its ridge and opaque rock down to the tile bottom.
+static GBitmap *s_bg_far, *s_bg_mid, *s_bg_near;
+#define BG_TILE_H 320
+
+// Draw one parallax layer, scrolled vertically with the climb and wrapped so
+// it never runs out. `base` is its rest position at ground level; `pfn/pfd`
+// is the parallax speed (smaller = farther/slower). Two copies (one tile
+// apart) keep the cover seamless as it loops.
+static void draw_bg_layer(GContext *ctx, GRect b, GBitmap *bmp,
+                          int32_t base, int32_t pfn, int32_t pfd) {
+  if (!bmp) return;
+  GSize sz = gbitmap_get_bounds(bmp).size;
+  int32_t scroll = ((-s_cam_y) * pfn) / pfd;
+  int32_t off = base + (scroll % BG_TILE_H);
+  for (int32_t y = off; y > -BG_TILE_H; y -= BG_TILE_H) {
+    if (y > b.size.h) continue;
+    graphics_draw_bitmap_in_rect(ctx, bmp, GRect(0, (int16_t)y, sz.w, sz.h));
   }
 }
 
+// The parallax mountain the climber ascends: a soft grey sky, then three
+// snow-capped rock ranges (grey far, brown massif, dark near) receding by
+// speed. Ledges sit over it all.
 static void draw_background(GContext *ctx, GRect b) {
-  draw_bg_cliff(ctx, b);
+  graphics_context_set_fill_color(ctx, GColorLightGray);   // soft grey sky
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  graphics_context_set_compositing_mode(ctx, GCompOpSet); // honour transparency
+  draw_bg_layer(ctx, b, s_bg_far, 6, 1, 8);
+  draw_bg_layer(ctx, b, s_bg_mid, 54, 1, 4);
+  draw_bg_layer(ctx, b, s_bg_near, 96, 1, 2);
+  graphics_context_set_compositing_mode(ctx, GCompOpAssign);
 }
 
 static GColor gem_color(uint8_t idx) {
@@ -1345,6 +1321,9 @@ static void init(void) {
   s_f28b = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
   s_mountain_path = gpath_create(&s_mountain_info);
   s_gem_path = gpath_create(&s_gem_info);
+  s_bg_far = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_BG_FAR);
+  s_bg_mid = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_BG_MID);
+  s_bg_near = gbitmap_create_with_resource(RESOURCE_ID_IMAGE_BG_NEAR);
 
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
@@ -1362,6 +1341,9 @@ static void deinit(void) {
   app_focus_service_unsubscribe();
   gpath_destroy(s_mountain_path);
   gpath_destroy(s_gem_path);
+  if (s_bg_far) gbitmap_destroy(s_bg_far);
+  if (s_bg_mid) gbitmap_destroy(s_bg_mid);
+  if (s_bg_near) gbitmap_destroy(s_bg_near);
   window_destroy(s_window);
 }
 

@@ -18,7 +18,11 @@
       "watchface": false
     },
     "resources": {
-      "media": []
+      "media": [
+        { "type": "bitmap", "name": "IMAGE_BG_FAR", "file": "images/bg_far.png" },
+        { "type": "bitmap", "name": "IMAGE_BG_MID", "file": "images/bg_mid.png" },
+        { "type": "bitmap", "name": "IMAGE_BG_NEAR", "file": "images/bg_near.png" }
+      ]
     }
   }
 }
