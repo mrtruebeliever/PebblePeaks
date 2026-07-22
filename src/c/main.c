@@ -7,6 +7,85 @@
 // parabolic arc — no mid-air steering.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Localization — device language via i18n_get_system_locale(), English
+// fallback. Strings are UTF-8; Pebble system fonts cover Latin-1. SELECT
+// is a fixed button label; UP/DOWN/BACK get localized.
+// ---------------------------------------------------------------------------
+
+typedef enum { L_EN, L_NL, L_FR, L_DE, L_ES, NUM_LANGS } Lang;
+
+enum {
+  S_TITLE, S_RECORD, S_HINT_CLIMB, S_HINT_SHOP,
+  S_SHOP_TITLE, S_ITEM_GRIP, S_ITEM_JACKET, S_ITEM_ROPE,
+  S_DESC_GRIP, S_DESC_JACKET, S_DESC_ROPE, S_MAX, S_SHOP_HINT,
+  S_WIN_TITLE, S_WIN_SUB, S_GEMS, S_HINT_CONTINUE,
+  S_FROZEN, S_BEST, S_HINT_RETRY,
+  S_PAUSED, S_HINT_RESUME,
+  NUM_STRS
+};
+
+static const char *TR[NUM_LANGS][NUM_STRS] = {
+  [L_EN] = {
+    "Pebble Peaks", "Record: %ldm", "UP/DOWN · climb", "SELECT · shop",
+    "Shop", "Grip soles", "Down jacket", "Climbing rope",
+    "Less sliding", "Slower mist", "SELECT · rescue", "MAX",
+    "SELECT · buy    BACK · back",
+    "Summit!", "You reached the top!", "Gems: %ld", "SELECT · continue",
+    "Frozen!", "Highest: %ldm", "SELECT · again",
+    "Paused", "SELECT · resume",
+  },
+  [L_NL] = {
+    "Pebble Peaks", "Record: %ldm", "OMHOOG/OMLAAG · klim", "SELECT · winkel",
+    "Winkel", "Gripzolen", "Donsjack", "Klimtouw",
+    "Minder glijden", "Tragere mist", "SELECT · redding", "MAX",
+    "SELECT · koop    TERUG · terug",
+    "De top!", "Je hebt de top bereikt!", "Edelstenen: %ld", "SELECT · verder",
+    "Bevroren!", "Hoogste: %ldm", "SELECT · opnieuw",
+    "Gepauzeerd", "SELECT · verder",
+  },
+  [L_FR] = {
+    "Pebble Peaks", "Record : %ldm", "HAUT/BAS · grimper", "SELECT · boutique",
+    "Boutique", "Semelles", "Doudoune", "Corde",
+    "Moins glisser", "Brume plus lente", "SELECT · secours", "MAX",
+    "SELECT · acheter   RETOUR · retour",
+    "Le sommet !", "Tu as atteint le sommet !", "Gemmes : %ld", "SELECT · continuer",
+    "Gelé !", "Max. : %ldm", "SELECT · rejouer",
+    "Pause", "SELECT · reprendre",
+  },
+  [L_DE] = {
+    "Pebble Peaks", "Rekord: %ldm", "HOCH/RUNTER · klettern", "SELECT · Laden",
+    "Laden", "Griffsohlen", "Daunenjacke", "Kletterseil",
+    "Weniger rutschen", "Nebel langsamer", "SELECT · Rettung", "MAX",
+    "SELECT · kaufen  ZURÜCK · zurück",
+    "Gipfel!", "Gipfel erreicht!", "Juwelen: %ld", "SELECT · weiter",
+    "Erfroren!", "Höchste: %ldm", "SELECT · nochmal",
+    "Pausiert", "SELECT · weiter",
+  },
+  [L_ES] = {
+    "Pebble Peaks", "Récord: %ldm", "ARRIBA/ABAJO · subir", "SELECT · tienda",
+    "Tienda", "Suelas", "Plumón", "Cuerda",
+    "Menos resbalar", "Niebla más lenta", "SELECT · rescate", "MAX",
+    "SELECT · comprar   ATRÁS · atrás",
+    "¡Cima!", "¡Llegaste a la cima!", "Gemas: %ld", "SELECT · continuar",
+    "¡Congelado!", "Máx.: %ldm", "SELECT · otra vez",
+    "Pausa", "SELECT · seguir",
+  },
+};
+
+static const char **s_tr = TR[L_EN];
+#define S(id) s_tr[id]
+
+static void pick_language(void) {
+  const char *loc = i18n_get_system_locale();
+  if (!loc) return;
+  if (strncmp(loc, "nl", 2) == 0) s_tr = TR[L_NL];
+  else if (strncmp(loc, "fr", 2) == 0) s_tr = TR[L_FR];
+  else if (strncmp(loc, "de", 2) == 0) s_tr = TR[L_DE];
+  else if (strncmp(loc, "es", 2) == 0) s_tr = TR[L_ES];
+  else s_tr = TR[L_EN];
+}
+
 #define TICK_MS 33            // ~30 fps
 #define FP 8                  // 8.8 fixed point
 
@@ -897,14 +976,14 @@ static void draw_title(GContext *ctx, GRect b) {
   graphics_context_set_fill_color(ctx, GColorCeleste);
   graphics_fill_rect(ctx, GRect(0, 0, b.size.w, 4), 0, GCornerNone);
 
-  draw_center_text(ctx, "Pebble Peaks", s_f28b, 14, 70, b, GColorWhite);
+  draw_center_text(ctx, S(S_TITLE), s_f28b, 14, 70, b, GColorWhite);
   // Once the summit has been reached, the trophy flag stands by the title.
   if (s_summit_reached) draw_flag(ctx, (int16_t)(b.size.w / 2 + 78), 42);
   draw_climber(ctx, b.size.w / 2, 88, false);
 
   // Records: all-time best height and the gem wallet.
   char buf[28];
-  snprintf(buf, sizeof(buf), "Record: %ldm", (long)s_alltime_best_m);
+  snprintf(buf, sizeof(buf), S(S_RECORD), (long)s_alltime_best_m);
   draw_center_text(ctx, buf, s_f18b, 118, 22, b, GColorOxfordBlue);
   snprintf(buf, sizeof(buf), "%ld", (long)s_gems_total);
   int16_t gx = (int16_t)(b.size.w / 2 - 14);
@@ -918,8 +997,8 @@ static void draw_title(GContext *ctx, GRect b) {
   graphics_draw_text(ctx, buf, s_f18b, GRect((int16_t)(gx + 8), 138, 60, 22),
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 
-  draw_center_text(ctx, "UP / DOWN · climb", s_f18b, 164, 24, b, GColorWhite);
-  draw_center_text(ctx, "SELECT · winkel", s_f14, 188, 20, b, GColorOxfordBlue);
+  draw_center_text(ctx, S(S_HINT_CLIMB), s_f18b, 164, 24, b, GColorWhite);
+  draw_center_text(ctx, S(S_HINT_SHOP), s_f14, 188, 20, b, GColorOxfordBlue);
 }
 
 static void draw_shop(GContext *ctx, GRect b) {
@@ -929,7 +1008,7 @@ static void draw_shop(GContext *ctx, GRect b) {
   char buf[16];
   GColor head = s_shop_flash ? GColorRed : GColorWhite;
   graphics_context_set_text_color(ctx, head);
-  graphics_draw_text(ctx, "Winkel", s_f28b, GRect(8, 0, 110, 30),
+  graphics_draw_text(ctx, S(S_SHOP_TITLE), s_f28b, GRect(8, 0, 110, 30),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   // Gem wallet, top-right.
   s_gem_pts[0] = GPoint((int16_t)(b.size.w - 52), 11);
@@ -943,8 +1022,8 @@ static void draw_shop(GContext *ctx, GRect b) {
   graphics_draw_text(ctx, buf, s_f18b, GRect(b.size.w - 44, 5, 40, 22),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 
-  const char *names[3] = {"Gripzolen", "Donsjack", "Klimtouw"};
-  const char *descs[3] = {"Minder glijden", "Tragere mist", "SELECT · redding"};
+  const char *names[3] = {S(S_ITEM_GRIP), S(S_ITEM_JACKET), S(S_ITEM_ROPE)};
+  const char *descs[3] = {S(S_DESC_GRIP), S(S_DESC_JACKET), S(S_DESC_ROPE)};
   int8_t levels[3] = {s_grip, s_jacket, s_rope};
 
   for (int i = 0; i < 3; i++) {
@@ -979,7 +1058,7 @@ static void draw_shop(GContext *ctx, GRect b) {
     // Price of the next level, or MAX.
     graphics_context_set_text_color(ctx, GColorPastelYellow);
     if (levels[i] >= MAX_LEVEL) {
-      snprintf(buf, sizeof(buf), "MAX");
+      snprintf(buf, sizeof(buf), "%s", S(S_MAX));
     } else {
       snprintf(buf, sizeof(buf), "%ld", (long)SHOP_COST[(int)levels[i]]);
     }
@@ -988,7 +1067,7 @@ static void draw_shop(GContext *ctx, GRect b) {
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
   }
 
-  draw_center_text(ctx, "SELECT · koop    BACK · terug", s_f14,
+  draw_center_text(ctx, S(S_SHOP_HINT), s_f14,
                    b.size.h - 18, 16, b, GColorLightGray);
 }
 
@@ -1003,28 +1082,28 @@ static void draw_victory(GContext *ctx, GRect b) {
   draw_flag(ctx, (int16_t)(b.size.w / 2 + 20), 84);
   draw_climber(ctx, (int16_t)(b.size.w / 2 - 16), 57, false);
 
-  draw_center_text(ctx, "De top!", s_f28b, 4, 32, b, GColorPastelYellow);
-  draw_center_text(ctx, "Je hebt de top bereikt!", s_f18b, 104, 44, b, GColorWhite);
+  draw_center_text(ctx, S(S_WIN_TITLE), s_f28b, 4, 32, b, GColorPastelYellow);
+  draw_center_text(ctx, S(S_WIN_SUB), s_f18b, 104, 44, b, GColorWhite);
 
   char buf[28];
   snprintf(buf, sizeof(buf), "%ldm", (long)SUMMIT_M);
   draw_center_text(ctx, buf, s_f28b, 138, 30, b, GColorCeleste);
-  snprintf(buf, sizeof(buf), "Edelstenen: %ld", (long)s_gems_run);
+  snprintf(buf, sizeof(buf), S(S_GEMS), (long)s_gems_run);
   draw_center_text(ctx, buf, s_f14, 172, 18, b, GColorCeleste);
-  draw_center_text(ctx, "SELECT · verder", s_f14, b.size.h - 22, 18, b, GColorLightGray);
+  draw_center_text(ctx, S(S_HINT_CONTINUE), s_f14, b.size.h - 22, 18, b, GColorLightGray);
 }
 
 static void draw_gameover(GContext *ctx, GRect b) {
   draw_game(ctx, b);
   graphics_context_set_fill_color(ctx, GColorBlack);
   graphics_fill_rect(ctx, GRect(0, b.size.h / 2 - 46, b.size.w, 92), 0, GCornerNone);
-  draw_center_text(ctx, "Bevroren!", s_f28b, b.size.h / 2 - 44, 30, b, GColorCeleste);
+  draw_center_text(ctx, S(S_FROZEN), s_f28b, b.size.h / 2 - 44, 30, b, GColorCeleste);
   char buf[24];
-  snprintf(buf, sizeof(buf), "Hoogste: %ldm", (long)s_best_height_m);
+  snprintf(buf, sizeof(buf), S(S_BEST), (long)s_best_height_m);
   draw_center_text(ctx, buf, s_f18b, b.size.h / 2 - 12, 22, b, GColorWhite);
-  snprintf(buf, sizeof(buf), "Edelstenen: %ld", (long)s_gems_run);
+  snprintf(buf, sizeof(buf), S(S_GEMS), (long)s_gems_run);
   draw_center_text(ctx, buf, s_f14, b.size.h / 2 + 10, 18, b, GColorCeleste);
-  draw_center_text(ctx, "SELECT · opnieuw", s_f14, b.size.h / 2 + 28, 18, b, GColorLightGray);
+  draw_center_text(ctx, S(S_HINT_RETRY), s_f14, b.size.h / 2 + 28, 18, b, GColorLightGray);
 }
 
 static void layer_update(Layer *layer, GContext *ctx) {
@@ -1037,8 +1116,8 @@ static void layer_update(Layer *layer, GContext *ctx) {
       draw_game(ctx, b);
       graphics_context_set_fill_color(ctx, GColorBlack);
       graphics_fill_rect(ctx, GRect(0, b.size.h / 2 - 26, b.size.w, 52), 0, GCornerNone);
-      draw_center_text(ctx, "Paused", s_f28b, b.size.h / 2 - 24, 30, b, GColorWhite);
-      draw_center_text(ctx, "SELECT · resume", s_f14, b.size.h / 2 + 6, 18, b, GColorLightGray);
+      draw_center_text(ctx, S(S_PAUSED), s_f28b, b.size.h / 2 - 24, 30, b, GColorWhite);
+      draw_center_text(ctx, S(S_HINT_RESUME), s_f14, b.size.h / 2 + 6, 18, b, GColorLightGray);
       break;
     case ST_GAMEOVER:
       draw_gameover(ctx, b);
@@ -1188,6 +1267,7 @@ static void window_unload(Window *window) {
 
 static void init(void) {
   srand(time(NULL));
+  pick_language();
   load_progress();
   s_f14 = fonts_get_system_font(FONT_KEY_GOTHIC_14);
   s_f18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
