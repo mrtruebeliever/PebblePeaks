@@ -14,20 +14,22 @@
 #define CLIMBER_SPRITE_H 27    // sprite height, top-of-head to feet
 
 // Fixed jump arc: vx constant (no air control), vy accelerates under
-// gravity. Tuned so the arc apex sits ~44px above the launch ledge and
-// the horizontal reach at same-height landing is ~37px. Climbing to a
-// ledge that's *higher* than the launch point lands earlier in the arc,
-// at a smaller horizontal offset — the actual offset shrinks from ~27px
-// (34px gap) down to ~20px (44px gap, right at the apex). This table was
-// derived by simulating the exact tick-by-tick fixed-point physics below
-// for gap = 34..44, and the procedural generator uses it (instead of a
-// flat reach) so every floor is genuinely reachable from the previous one.
+// gravity. With gravity applied before the first move, the discrete arc
+// apex is 43px above the launch ledge (not the ~48px the continuous math
+// suggests), so floor gaps are capped at 42 — a 44px gap is physically
+// unclimbable. Climbing to a ledge that's *higher* than the launch point
+// lands earlier in the arc, at a smaller horizontal offset — the offset
+// shrinks from ~27px (34px gap) to ~22px (42px gap). This table was
+// derived by simulating the exact tick-by-tick fixed-point physics
+// (tools/sim_climb.py) for gap = 34..42, and the procedural generator
+// uses it (instead of a flat reach) so every floor is genuinely
+// reachable from the previous one.
 #define GRAVITY_FP 200
 #define JUMP_VX_FP 435
 #define JUMP_VY0_FP (-2220)
-static const int8_t REACH_FOR_GAP[11] = { 27, 27, 27, 25, 25, 25, 23, 23, 22, 22, 20 };
+static const int8_t REACH_FOR_GAP[9] = { 27, 27, 27, 25, 25, 25, 23, 23, 22 };
 #define FLOOR_GAP_MIN 34
-#define FLOOR_GAP_MAX 44
+#define FLOOR_GAP_MAX 42
 
 // World-coordinate ledges (y grows downward, same convention as before,
 // just no longer a fixed compile-time list — floors are generated ahead
@@ -79,8 +81,35 @@ static int16_t s_invuln_ticks;
 
 #define PK_GEMS 1
 #define PK_BEST 2
+#define PK_GRIP 3
+#define PK_JACKET 4
+#define PK_ROPE 5
+#define PK_SUMMIT 6
 
-typedef enum { ST_TITLE, ST_PLAYING, ST_PAUSED, ST_GAMEOVER } GameState;
+// Shop: three upgrades, five levels each. Effects per level:
+// grip soles — ice slides slower, crumble ledges last ~0.15s longer;
+// down jacket — mist starts farther below and rises 4% slower;
+// climbing rope — one SELECT rescue per run per level (max 5).
+#define MAX_LEVEL 5
+static const int32_t SHOP_COST[MAX_LEVEL] = {15, 40, 90, 160, 250};
+static int8_t s_grip, s_jacket, s_rope;
+static bool s_summit_reached;   // ever reached the 1000m top (trophy flag)
+static int8_t s_shop_sel;
+static int8_t s_shop_flash;     // "not enough gems" flash
+
+// Rope rescue: remember the geometry of the last ledge the climber stood
+// on, so SELECT can spring them back even if the slot got recycled or the
+// ledge crumbled away (the rope re-anchors it as a normal ledge).
+static int16_t s_resc_x, s_resc_y, s_resc_w;
+static int8_t s_resc_idx = -1;
+static int8_t s_rope_left;      // rescues remaining this run
+
+// The summit: a wide flagged ledge generated at SUMMIT_M. Landing on it
+// wins the game. No floors generate above it.
+#define SUMMIT_M 1000
+static int8_t s_summit_idx = -1; // ledge slot holding the summit, -1 = none
+
+typedef enum { ST_TITLE, ST_PLAYING, ST_PAUSED, ST_GAMEOVER, ST_VICTORY, ST_SHOP } GameState;
 
 static Window *s_window;
 static Layer *s_layer;
@@ -145,11 +174,36 @@ static Ledge *find_free_ledge_slot(void) {
 static void save_progress(void) {
   persist_write_int(PK_GEMS, s_gems_total);
   persist_write_int(PK_BEST, s_alltime_best_m);
+  persist_write_int(PK_GRIP, s_grip);
+  persist_write_int(PK_JACKET, s_jacket);
+  persist_write_int(PK_ROPE, s_rope);
+  persist_write_bool(PK_SUMMIT, s_summit_reached);
 }
 
 static void load_progress(void) {
   s_gems_total = persist_read_int(PK_GEMS);
   s_alltime_best_m = persist_read_int(PK_BEST);
+  s_grip = (int8_t)persist_read_int(PK_GRIP);
+  s_jacket = (int8_t)persist_read_int(PK_JACKET);
+  s_rope = (int8_t)persist_read_int(PK_ROPE);
+  s_summit_reached = persist_read_bool(PK_SUMMIT);
+}
+
+// Upgrade-adjusted tunables (the #defines above are the level-0 baselines).
+static int32_t ice_slide_fp(void) {
+  return ICE_SLIDE_FP - s_grip * 54;          // 1.5 px/tick down to ~0.45
+}
+
+static int16_t crumble_ticks_max(void) {
+  return (int16_t)(CRUMBLE_TICKS + s_grip * 5); // +~0.15s per level
+}
+
+static int32_t mist_gap_start(void) {
+  return MIST_GAP_START + s_jacket * 12;       // 60px up to 120px head start
+}
+
+static int32_t mist_speed_pct(void) {
+  return 100 - s_jacket * 4;                   // 4% slower per level
 }
 
 // Crumble/ice ledges start appearing above SPECIAL_LEDGE_MIN_M, growing more
@@ -183,6 +237,27 @@ static void generate_floor(void) {
   int32_t gap = FLOOR_GAP_MIN + rand() % (FLOOR_GAP_MAX - FLOOR_GAP_MIN + 1);
   int32_t reach = REACH_FOR_GAP[gap - FLOOR_GAP_MIN];
   int32_t next_y = s_gen_top_y - gap;
+
+  // The top of the mountain: one wide, flagged ledge at SUMMIT_M. Centered
+  // on the reachability anchor (its width dwarfs the jump reach), and
+  // nothing generates above it — landing there wins.
+  if (height_from_world_y(next_y) >= SUMMIT_M) {
+    Ledge *slot = find_free_ledge_slot();
+    if (!slot) return; // retried next tick once a slot frees up
+    int16_t sw = 100;
+    int32_t sc = s_gen_ref_x;
+    if (sc < sw / 2 + 4) sc = sw / 2 + 4;
+    if (sc > s_bounds.size.w - sw / 2 - 4) sc = s_bounds.size.w - sw / 2 - 4;
+    slot->x = (int16_t)(sc - sw / 2);
+    slot->y = (int16_t)next_y;
+    slot->w = sw;
+    slot->type = LEDGE_NORMAL;
+    slot->crumble_ticks = -1;
+    s_summit_idx = (int8_t)(slot - s_ledges);
+    s_gen_top_y = next_y;
+    return;
+  }
+
   int16_t width = ledge_width_for(next_y);
   int16_t half_w = width / 2;
 
@@ -233,7 +308,11 @@ static void generate_floor(void) {
 }
 
 static void ensure_floors_generated(void) {
-  while (s_gen_top_y > s_cam_y - 40) generate_floor();
+  while (s_summit_idx < 0 && s_gen_top_y > s_cam_y - 40) {
+    int32_t before = s_gen_top_y;
+    generate_floor();
+    if (s_gen_top_y == before) break; // no free slot for the summit yet
+  }
 }
 
 static void recycle_offscreen_ledges(void) {
@@ -260,6 +339,10 @@ static void start_run(void) {
   s_invuln_ticks = 0;
   for (int i = 0; i < MAX_GEMS; i++) s_gems[i].active = false;
   for (int i = 0; i < MAX_ROCKS; i++) s_rocks[i].active = false;
+  s_summit_idx = -1;
+  s_rope_left = s_rope;
+  s_resc_idx = -1;
+  s_resc_w = 0;
 
   for (int i = 0; i < MAX_LEDGES; i++) s_ledges[i].w = 0;
   s_ledges[0].x = 0;
@@ -273,7 +356,7 @@ static void start_run(void) {
 
   place_on_ledge(&s_ledges[0]);
   s_standing_ledge_idx = 0;
-  s_mist_top_fp = (int32_t)(s_base_y + MIST_GAP_START) << FP;
+  s_mist_top_fp = (s_base_y + mist_gap_start()) << FP;
 
   s_state = ST_PLAYING;
   stop_timer();
@@ -293,12 +376,58 @@ static void trigger_game_over(void) {
   layer_mark_dirty(s_layer);
 }
 
+static void trigger_victory(void) {
+  s_state = ST_VICTORY;
+  s_lock_ticks = 30;
+  s_gems_total += s_gems_run;
+  if (s_best_height_m > s_alltime_best_m) s_alltime_best_m = s_best_height_m;
+  s_summit_reached = true;
+  save_progress();
+  stop_timer();
+  s_timer = app_timer_register(TICK_MS, game_tick, NULL);
+  vibes_double_pulse();
+  layer_mark_dirty(s_layer);
+}
+
+// Remember the ledge the climber is leaving, as the rope-rescue target.
+static void record_rescue_ledge(void) {
+  if (s_standing_ledge_idx < 0) return;
+  const Ledge *l = &s_ledges[s_standing_ledge_idx];
+  s_resc_idx = (int8_t)s_standing_ledge_idx;
+  s_resc_x = l->x;
+  s_resc_y = l->y;
+  s_resc_w = l->w;
+}
+
+// SELECT mid-air with rope charges left: spring back to the last-left
+// ledge. If its slot got recycled or the ledge crumbled away, the rope
+// re-anchors it there as a plain ledge again.
+static void try_rope_rescue(void) {
+  if (!s_airborne || s_rope_left <= 0 || s_resc_w == 0) return;
+  Ledge *slot = &s_ledges[s_resc_idx];
+  if (slot->w != s_resc_w || slot->x != s_resc_x || slot->y != s_resc_y) {
+    slot = find_free_ledge_slot();
+    if (!slot) return;
+    slot->x = s_resc_x;
+    slot->y = s_resc_y;
+    slot->w = s_resc_w;
+  }
+  slot->type = LEDGE_NORMAL;
+  slot->crumble_ticks = -1;
+  place_on_ledge(slot);
+  s_standing_ledge_idx = (int16_t)(slot - s_ledges);
+  s_rope_left--;
+  vibes_short_pulse();
+  layer_mark_dirty(s_layer);
+}
+
 // ---------------------------------------------------------------------------
 // Physics
 // ---------------------------------------------------------------------------
 
 static void try_jump(int8_t dir) {
   if (s_state != ST_PLAYING || s_airborne) return;
+  record_rescue_ledge();
   s_airborne = true;
   s_bounced = false;
   s_standing_ledge_idx = -1;
@@ -310,7 +439,7 @@ static void try_jump(int8_t dir) {
 static void game_tick(void *data) {
   s_timer = NULL;
 
-  if (s_state == ST_GAMEOVER) {
+  if (s_state == ST_GAMEOVER || s_state == ST_VICTORY) {
     if (s_lock_ticks > 0) {
       s_lock_ticks--;
       s_timer = app_timer_register(TICK_MS, game_tick, NULL);
@@ -350,12 +479,22 @@ static void game_tick(void *data) {
           place_on_ledge(l);
           // place_on_ledge recenters x on the ledge midpoint; nudge it back
           // to the actual landing x so jumps don't visually snap sideways.
+          // Clamped to at most 5px of edge overhang: from anywhere inside
+          // that window the next anchored floor is provably reachable
+          // (|true jump offset - reach table| <= 2, see tools/sim_climb.py);
+          // the full 7px collision overhang would leave a 2px dead zone.
+          if (cx < l->x - 5) cx = (int16_t)(l->x - 5);
+          if (cx > l->x + l->w + 5) cx = (int16_t)(l->x + l->w + 5);
           s_climber_x_fp = (int32_t)cx << FP;
           s_standing_ledge_idx = i;
+          if (i == s_summit_idx) {
+            trigger_victory();
+            return;
+          }
           if (l->type == LEDGE_ICE) {
             s_ice_dir = land_dir;
           } else if (l->type == LEDGE_CRUMBLE && l->crumble_ticks < 0) {
-            l->crumble_ticks = CRUMBLE_TICKS;
+            l->crumble_ticks = crumble_ticks_max();
           }
           break;
         }
@@ -368,9 +507,10 @@ static void game_tick(void *data) {
   if (!s_airborne && s_standing_ledge_idx >= 0) {
     Ledge *sl = &s_ledges[s_standing_ledge_idx];
     if (sl->w != 0 && sl->type == LEDGE_ICE) {
-      s_climber_x_fp += s_ice_dir * ICE_SLIDE_FP;
+      s_climber_x_fp += s_ice_dir * ice_slide_fp();
       int16_t cx2 = s_climber_x_fp >> FP;
       if (cx2 < sl->x || cx2 > sl->x + sl->w) {
+        record_rescue_ledge();
         s_airborne = true;
         s_bounced = false;
         s_vx_fp = s_ice_dir * 100;
@@ -388,6 +528,7 @@ static void game_tick(void *data) {
     l->crumble_ticks--;
     if (l->crumble_ticks < 0) {
       bool climber_here = !s_airborne && s_standing_ledge_idx == i;
+      if (climber_here) record_rescue_ledge();
       l->w = 0;
       if (climber_here) {
         s_airborne = true;
@@ -448,6 +589,7 @@ static void game_tick(void *data) {
         r->active = false;
         s_invuln_ticks = 45;
         vibes_short_pulse();
+        record_rescue_ledge();
         s_airborne = true;
         s_bounced = false;
         s_vx_fp = 0;
@@ -477,6 +619,7 @@ static void game_tick(void *data) {
   int32_t scale_fp = 256 + (s_height_m * 26) / 100;
   if (scale_fp > MIST_MAX_SCALE_FP) scale_fp = MIST_MAX_SCALE_FP;
   int32_t mist_speed_fp = (MIST_BASE_SPEED_FP * scale_fp) >> 8;
+  mist_speed_fp = (mist_speed_fp * mist_speed_pct()) / 100;
   s_mist_top_fp -= mist_speed_fp;
   s_wave_phase += 6;
 
@@ -537,6 +680,34 @@ static void draw_ledges(GContext *ctx) {
   }
 }
 
+// Shared 4-point scratch path, used for gems, the flag pennant and the
+// wallet icons — each caller sets all four points before drawing.
+static GPoint s_gem_pts[4];
+static GPathInfo s_gem_info = { .num_points = 4, .points = s_gem_pts };
+static GPath *s_gem_path;
+
+// The summit flag: dark pole with a red pennant, planted on a ledge top.
+static void draw_flag(GContext *ctx, int16_t cx, int16_t base_y) {
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  graphics_draw_line(ctx, GPoint(cx, base_y), GPoint(cx, base_y - 22));
+  graphics_draw_line(ctx, GPoint(cx + 1, base_y), GPoint(cx + 1, base_y - 22));
+  graphics_context_set_fill_color(ctx, GColorRed);
+  s_gem_pts[0] = GPoint((int16_t)(cx + 1), (int16_t)(base_y - 22));
+  s_gem_pts[1] = GPoint((int16_t)(cx + 15), (int16_t)(base_y - 18));
+  s_gem_pts[2] = GPoint((int16_t)(cx + 1), (int16_t)(base_y - 13));
+  s_gem_pts[3] = GPoint((int16_t)(cx + 1), (int16_t)(base_y - 18));
+  gpath_draw_filled(ctx, s_gem_path);
+}
+
+static void draw_summit_flag(GContext *ctx) {
+  if (s_summit_idx < 0) return;
+  const Ledge *l = &s_ledges[s_summit_idx];
+  if (l->w == 0) return;
+  int16_t sy = (int16_t)(l->y - s_cam_y);
+  if (sy < -30 || sy > s_bounds.size.h + 8) return;
+  draw_flag(ctx, (int16_t)(l->x + l->w / 2), sy);
+}
+
 static GColor sky_color(int32_t height_m) {
   if (height_m < 150) return GColorVividCerulean;
   if (height_m < 350) return GColorCobaltBlue;
@@ -588,10 +759,6 @@ static GColor gem_color(uint8_t idx) {
     default: return GColorShockingPink;
   }
 }
-
-static GPoint s_gem_pts[4];
-static GPathInfo s_gem_info = { .num_points = 4, .points = s_gem_pts };
-static GPath *s_gem_path;
 
 static void draw_gems(GContext *ctx, GRect b) {
   graphics_context_set_stroke_color(ctx, GColorBlack);
@@ -687,6 +854,12 @@ static void draw_hud(GContext *ctx, GRect b) {
   graphics_context_set_text_color(ctx, GColorWhite);
   graphics_draw_text(ctx, gbuf, s_f14, GRect((int16_t)(b.size.w - 34), 1, 32, 16),
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+
+  // Remaining rope rescues, as small yellow dots under the height counter.
+  graphics_context_set_fill_color(ctx, GColorChromeYellow);
+  for (int i = 0; i < s_rope_left; i++) {
+    graphics_fill_circle(ctx, GPoint((int16_t)(7 + i * 9), 23), 3);
+  }
 }
 
 static void draw_game(GContext *ctx, GRect b) {
@@ -696,6 +869,7 @@ static void draw_game(GContext *ctx, GRect b) {
   draw_mountains(ctx, b);
 
   draw_ledges(ctx);
+  draw_summit_flag(ctx);
   draw_gems(ctx, b);
   draw_rocks(ctx, b);
 
@@ -724,10 +898,120 @@ static void draw_title(GContext *ctx, GRect b) {
   graphics_fill_rect(ctx, GRect(0, 0, b.size.w, 4), 0, GCornerNone);
 
   draw_center_text(ctx, "Pebble Peaks", s_f28b, 14, 70, b, GColorWhite);
-  draw_climber(ctx, b.size.w / 2, 110, false);
+  // Once the summit has been reached, the trophy flag stands by the title.
+  if (s_summit_reached) draw_flag(ctx, (int16_t)(b.size.w / 2 + 78), 42);
+  draw_climber(ctx, b.size.w / 2, 88, false);
 
-  draw_center_text(ctx, "UP / DOWN · climb", s_f18b, 158, 24, b, GColorWhite);
-  draw_center_text(ctx, "BACK · quit", s_f14, 182, 20, b, GColorOxfordBlue);
+  // Records: all-time best height and the gem wallet.
+  char buf[28];
+  snprintf(buf, sizeof(buf), "Record: %ldm", (long)s_alltime_best_m);
+  draw_center_text(ctx, buf, s_f18b, 118, 22, b, GColorOxfordBlue);
+  snprintf(buf, sizeof(buf), "%ld", (long)s_gems_total);
+  int16_t gx = (int16_t)(b.size.w / 2 - 14);
+  s_gem_pts[0] = GPoint(gx, 145);
+  s_gem_pts[1] = GPoint((int16_t)(gx + 4), 150);
+  s_gem_pts[2] = GPoint(gx, 155);
+  s_gem_pts[3] = GPoint((int16_t)(gx - 4), 150);
+  graphics_context_set_fill_color(ctx, GColorMagenta);
+  gpath_draw_filled(ctx, s_gem_path);
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, buf, s_f18b, GRect((int16_t)(gx + 8), 138, 60, 22),
+                     GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+
+  draw_center_text(ctx, "UP / DOWN · climb", s_f18b, 164, 24, b, GColorWhite);
+  draw_center_text(ctx, "SELECT · winkel", s_f14, 188, 20, b, GColorOxfordBlue);
+}
+
+static void draw_shop(GContext *ctx, GRect b) {
+  graphics_context_set_fill_color(ctx, GColorOxfordBlue);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+
+  char buf[16];
+  GColor head = s_shop_flash ? GColorRed : GColorWhite;
+  graphics_context_set_text_color(ctx, head);
+  graphics_draw_text(ctx, "Winkel", s_f28b, GRect(8, 0, 110, 30),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  // Gem wallet, top-right.
+  s_gem_pts[0] = GPoint((int16_t)(b.size.w - 52), 11);
+  s_gem_pts[1] = GPoint((int16_t)(b.size.w - 48), 16);
+  s_gem_pts[2] = GPoint((int16_t)(b.size.w - 52), 21);
+  s_gem_pts[3] = GPoint((int16_t)(b.size.w - 56), 16);
+  graphics_context_set_fill_color(ctx, GColorMagenta);
+  gpath_draw_filled(ctx, s_gem_path);
+  snprintf(buf, sizeof(buf), "%ld", (long)s_gems_total);
+  graphics_context_set_text_color(ctx, head);
+  graphics_draw_text(ctx, buf, s_f18b, GRect(b.size.w - 44, 5, 40, 22),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+
+  const char *names[3] = {"Gripzolen", "Donsjack", "Klimtouw"};
+  const char *descs[3] = {"Minder glijden", "Tragere mist", "SELECT · redding"};
+  int8_t levels[3] = {s_grip, s_jacket, s_rope};
+
+  for (int i = 0; i < 3; i++) {
+    int16_t y = (int16_t)(34 + i * 58);
+    GRect card = GRect(6, y, b.size.w - 12, 54);
+    graphics_context_set_fill_color(ctx, i == s_shop_sel ? GColorCobaltBlue : GColorDukeBlue);
+    graphics_fill_rect(ctx, card, 4, GCornersAll);
+    if (i == s_shop_sel) {
+      graphics_context_set_stroke_color(ctx, GColorWhite);
+      graphics_draw_round_rect(ctx, card, 4);
+    }
+
+    graphics_context_set_text_color(ctx, GColorWhite);
+    graphics_draw_text(ctx, names[i], s_f18b, GRect(card.origin.x + 6, y, 130, 22),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+    graphics_context_set_text_color(ctx, GColorCeleste);
+    graphics_draw_text(ctx, descs[i], s_f14, GRect(card.origin.x + 6, y + 20, 132, 18),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+
+    // Level pips
+    for (int p = 0; p < MAX_LEVEL; p++) {
+      GRect pip = GRect(card.origin.x + 6 + p * 10, y + 42, 7, 7);
+      if (p < levels[i]) {
+        graphics_context_set_fill_color(ctx, GColorGreen);
+        graphics_fill_rect(ctx, pip, 1, GCornersAll);
+      } else {
+        graphics_context_set_stroke_color(ctx, GColorLightGray);
+        graphics_draw_rect(ctx, pip);
+      }
+    }
+
+    // Price of the next level, or MAX.
+    graphics_context_set_text_color(ctx, GColorPastelYellow);
+    if (levels[i] >= MAX_LEVEL) {
+      snprintf(buf, sizeof(buf), "MAX");
+    } else {
+      snprintf(buf, sizeof(buf), "%ld", (long)SHOP_COST[(int)levels[i]]);
+    }
+    graphics_draw_text(ctx, buf, s_f18b,
+                       GRect(card.origin.x + card.size.w - 42, y + 16, 38, 22),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+  }
+
+  draw_center_text(ctx, "SELECT · koop    BACK · terug", s_f14,
+                   b.size.h - 18, 16, b, GColorLightGray);
+}
+
+static void draw_victory(GContext *ctx, GRect b) {
+  graphics_context_set_fill_color(ctx, GColorOxfordBlue);
+  graphics_fill_rect(ctx, b, 0, GCornerNone);
+  draw_stars(ctx, b);
+
+  // Summit scene: flag on a small peak, climber beside it.
+  graphics_context_set_fill_color(ctx, GColorWindsorTan);
+  graphics_fill_rect(ctx, GRect(b.size.w / 2 - 50, 84, 100, 8), 2, GCornersAll);
+  draw_flag(ctx, (int16_t)(b.size.w / 2 + 20), 84);
+  draw_climber(ctx, (int16_t)(b.size.w / 2 - 16), 57, false);
+
+  draw_center_text(ctx, "De top!", s_f28b, 4, 32, b, GColorPastelYellow);
+  draw_center_text(ctx, "Je hebt de top bereikt!", s_f18b, 104, 44, b, GColorWhite);
+
+  char buf[28];
+  snprintf(buf, sizeof(buf), "%ldm", (long)SUMMIT_M);
+  draw_center_text(ctx, buf, s_f28b, 138, 30, b, GColorCeleste);
+  snprintf(buf, sizeof(buf), "Edelstenen: %ld", (long)s_gems_run);
+  draw_center_text(ctx, buf, s_f14, 172, 18, b, GColorCeleste);
+  draw_center_text(ctx, "SELECT · verder", s_f14, b.size.h - 22, 18, b, GColorLightGray);
 }
 
 static void draw_gameover(GContext *ctx, GRect b) {
@@ -759,6 +1043,12 @@ static void layer_update(Layer *layer, GContext *ctx) {
     case ST_GAMEOVER:
       draw_gameover(ctx, b);
       break;
+    case ST_VICTORY:
+      draw_victory(ctx, b);
+      break;
+    case ST_SHOP:
+      draw_shop(ctx, b);
+      break;
     case ST_TITLE:
       draw_title(ctx, b);
       break;
@@ -769,24 +1059,70 @@ static void layer_update(Layer *layer, GContext *ctx) {
 // Input — two buttons, no holding: UP jumps up-left, DOWN jumps up-right.
 // ---------------------------------------------------------------------------
 
+static void shop_flash_end(void *data) {
+  s_shop_flash = 0;
+  layer_mark_dirty(s_layer);
+}
+
+static void shop_buy(void) {
+  int8_t *lvl[3] = {&s_grip, &s_jacket, &s_rope};
+  int8_t cur = *lvl[(int)s_shop_sel];
+  if (cur >= MAX_LEVEL) return;
+  int32_t cost = SHOP_COST[(int)cur];
+  if (s_gems_total < cost) {
+    s_shop_flash = 1;
+    app_timer_register(600, shop_flash_end, NULL);
+    vibes_double_pulse();
+    layer_mark_dirty(s_layer);
+    return;
+  }
+  s_gems_total -= cost;
+  (*lvl[(int)s_shop_sel])++;
+  save_progress();
+  vibes_short_pulse();
+  layer_mark_dirty(s_layer);
+}
+
 static void up_click(ClickRecognizerRef rec, void *ctx) {
   if (s_state == ST_TITLE) start_run();
   else if (s_state == ST_PLAYING) try_jump(-1);
+  else if (s_state == ST_SHOP && s_shop_sel > 0) {
+    s_shop_sel--;
+    layer_mark_dirty(s_layer);
+  }
 }
 
 static void down_click(ClickRecognizerRef rec, void *ctx) {
   if (s_state == ST_TITLE) start_run();
   else if (s_state == ST_PLAYING) try_jump(1);
+  else if (s_state == ST_SHOP && s_shop_sel < 2) {
+    s_shop_sel++;
+    layer_mark_dirty(s_layer);
+  }
 }
 
 static void select_click(ClickRecognizerRef rec, void *ctx) {
-  if (s_state == ST_PAUSED) {
+  if (s_state == ST_TITLE) {
+    s_shop_sel = 0;
+    s_state = ST_SHOP;
+    layer_mark_dirty(s_layer);
+  } else if (s_state == ST_PLAYING) {
+    try_rope_rescue();
+  } else if (s_state == ST_SHOP) {
+    shop_buy();
+  } else if (s_state == ST_PAUSED) {
     s_state = ST_PLAYING;
     stop_timer();
     s_timer = app_timer_register(TICK_MS, game_tick, NULL);
     layer_mark_dirty(s_layer);
-  } else if (s_state == ST_GAMEOVER && s_lock_ticks == 0) {
-    start_run();
+  } else if ((s_state == ST_GAMEOVER || s_state == ST_VICTORY) && s_lock_ticks == 0) {
+    if (s_state == ST_VICTORY) {
+      s_state = ST_TITLE;
+      stop_timer();
+      layer_mark_dirty(s_layer);
+    } else {
+      start_run();
+    }
   }
 }
 
@@ -802,11 +1138,16 @@ static void back_click(ClickRecognizerRef rec, void *ctx) {
       layer_mark_dirty(s_layer);
       break;
     case ST_GAMEOVER:
+    case ST_VICTORY:
       if (s_lock_ticks == 0) {
         s_state = ST_TITLE;
         stop_timer();
         layer_mark_dirty(s_layer);
       }
+      break;
+    case ST_SHOP:
+      s_state = ST_TITLE;
+      layer_mark_dirty(s_layer);
       break;
     case ST_TITLE:
       window_stack_pop(true);
