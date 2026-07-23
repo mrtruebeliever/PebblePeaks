@@ -128,13 +128,14 @@ static int32_t s_gen_top_y;   // world y of the highest floor generated so far
 static int16_t s_gen_ref_x;   // last floor's center x (reachability anchor)
 static int16_t s_standing_ledge_idx = -1; // index into s_ledges, -1 if airborne
 static int8_t s_ice_dir;      // slide direction while standing on an ice ledge
+static int8_t s_slide_off_idx = -1; // ledge just slid off an ice edge — don't instantly re-land on it
 
 #define SPECIAL_LEDGE_MIN_M 150 // crumble/ice ledges start appearing above this height
 #define CRUMBLE_TICKS 24        // 0.8s @ 30fps before a landed-on crumble ledge vanishes
 #define ICE_SLIDE_FP 384        // 1.5 px/tick in 8.8 fixed
 
 #define MIST_GAP_START 60      // px below climber's start the mist begins
-#define MIST_BASE_SPEED_FP 90  // 0.35 px/tick in 8.8 fixed
+#define MIST_BASE_SPEED_FP 140 // ~0.55 px/tick in 8.8 fixed — a real threat if you dawdle
 #define MIST_MAX_SCALE_FP 878  // caps speed at 1.2 px/tick (878/256 ~= 3.43x)
 
 #define MAX_GEMS 16
@@ -436,6 +437,7 @@ static void start_run(void) {
 
   place_on_ledge(&s_ledges[0]);
   s_standing_ledge_idx = 0;
+  s_slide_off_idx = -1;
   s_mist_top_fp = (s_base_y + mist_gap_start()) << FP;
 
   s_state = ST_PLAYING;
@@ -511,6 +513,7 @@ static void try_jump(int8_t dir) {
   s_airborne = true;
   s_bounced = false;
   s_standing_ledge_idx = -1;
+  s_slide_off_idx = -1;
   s_vx_fp = (int32_t)dir * JUMP_VX_FP;
   s_vy_fp = JUMP_VY0_FP;
   layer_mark_dirty(s_layer);
@@ -553,6 +556,7 @@ static void game_tick(void *data) {
       for (int i = 0; i < MAX_LEDGES; i++) {
         Ledge *l = &s_ledges[i];
         if (l->w == 0) continue;
+        if (i == s_slide_off_idx) continue;   // skip the ice edge we just left
         bool crossed = prev_feet_y <= l->y && feet_y >= l->y;
         bool over_ledge = (cx + CLIMBER_R >= l->x) && (cx - CLIMBER_R <= l->x + l->w);
         if (crossed && over_ledge) {
@@ -567,6 +571,7 @@ static void game_tick(void *data) {
           if (cx > l->x + l->w + 5) cx = (int16_t)(l->x + l->w + 5);
           s_climber_x_fp = (int32_t)cx << FP;
           s_standing_ledge_idx = i;
+          s_slide_off_idx = -1;
           if (i == s_summit_idx) {
             trigger_victory();
             return;
@@ -595,6 +600,7 @@ static void game_tick(void *data) {
         s_bounced = false;
         s_vx_fp = s_ice_dir * 100;
         s_vy_fp = 0;
+        s_slide_off_idx = (int8_t)s_standing_ledge_idx;  // fall clear, don't re-catch this edge
         s_standing_ledge_idx = -1;
       }
     }
@@ -696,7 +702,7 @@ static void game_tick(void *data) {
 
   // Mist: rises steadily, accelerating with height, and ends the run the
   // instant it reaches the climber.
-  int32_t scale_fp = 256 + (s_height_m * 26) / 100;
+  int32_t scale_fp = 256 + (s_height_m * 30) / 100;
   if (scale_fp > MIST_MAX_SCALE_FP) scale_fp = MIST_MAX_SCALE_FP;
   int32_t mist_speed_fp = (MIST_BASE_SPEED_FP * scale_fp) >> 8;
   mist_speed_fp = (mist_speed_fp * mist_speed_pct()) / 100;
