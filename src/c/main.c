@@ -716,17 +716,26 @@ static void game_tick(void *data) {
 // ---------------------------------------------------------------------------
 
 static void draw_climber(GContext *ctx, int16_t cx, int16_t top_y, bool airborne) {
-  // Cap + pompom
-  graphics_context_set_fill_color(ctx, GColorRed);
-  graphics_fill_rect(ctx, GRect(cx - 5, top_y - 3, 10, 5), 2, GCornersTop);
+  const GColor jacket = GColorBlue;   // bright blue pops off the grey/brown range
+  // Cap + pompom, black-outlined.
+  GRect cap = GRect(cx - 5, top_y - 3, 10, 6);
+  graphics_context_set_fill_color(ctx, jacket);
+  graphics_fill_rect(ctx, cap, 2, GCornersTop);
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  graphics_draw_round_rect(ctx, cap, 2);
   graphics_context_set_fill_color(ctx, GColorWhite);
-  graphics_draw_pixel(ctx, GPoint(cx, top_y - 4));
-  // Head
+  graphics_fill_circle(ctx, GPoint(cx, top_y - 4), 1);
+  // Head with a dark outline.
   graphics_context_set_fill_color(ctx, GColorPastelYellow);
   graphics_fill_circle(ctx, GPoint(cx, top_y + 4), 5);
-  // Body (red jacket)
-  graphics_context_set_fill_color(ctx, GColorRed);
-  graphics_fill_rect(ctx, GRect(cx - 6, top_y + 8, 12, 11), 3, GCornersAll);
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  graphics_draw_circle(ctx, GPoint(cx, top_y + 4), 5);
+  // Body (blue jacket) with a dark outline.
+  GRect torso = GRect(cx - 6, top_y + 8, 12, 11);
+  graphics_context_set_fill_color(ctx, jacket);
+  graphics_fill_rect(ctx, torso, 3, GCornersAll);
+  graphics_context_set_stroke_color(ctx, GColorBlack);
+  graphics_draw_round_rect(ctx, torso, 3);
   // Legs: spread mid-air, together when standing/landed
   graphics_context_set_stroke_color(ctx, GColorBlack);
   if (airborne) {
@@ -753,12 +762,13 @@ static void draw_ledges(GContext *ctx) {
     GRect r = GRect(sx, sy, l->w, 8);
     GColor fill = l->type == LEDGE_ICE ? GColorCeleste
                 : l->type == LEDGE_CRUMBLE ? GColorBulgarianRose
-                : GColorWindsorTan;
+                : GColorLightGray;                 // stone-grey shelf vs the brown massif
     graphics_context_set_fill_color(ctx, fill);
     graphics_fill_rect(ctx, r, 2, GCornersAll);
-    // Sunlit top edge — lifts the ledge off the similar-brown mountain.
+    // Bright top edge + black outline so the shelf reads clearly against any
+    // part of the mountain.
     if (l->type == LEDGE_NORMAL) {
-      graphics_context_set_stroke_color(ctx, GColorRajah);
+      graphics_context_set_stroke_color(ctx, GColorWhite);
       graphics_draw_line(ctx, GPoint((int16_t)(sx + 1), (int16_t)(sy + 1)),
                          GPoint((int16_t)(sx + l->w - 2), (int16_t)(sy + 1)));
     }
