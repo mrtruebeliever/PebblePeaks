@@ -762,13 +762,13 @@ static void draw_ledges(GContext *ctx) {
     GRect r = GRect(sx, sy, l->w, 8);
     GColor fill = l->type == LEDGE_ICE ? GColorCeleste
                 : l->type == LEDGE_CRUMBLE ? GColorBulgarianRose
-                : GColorLightGray;                 // stone-grey shelf vs the brown massif
+                : GColorOrange;   // vivid orange — brighter than the dull-brown massif and the grey peaks
     graphics_context_set_fill_color(ctx, fill);
     graphics_fill_rect(ctx, r, 2, GCornersAll);
-    // Bright top edge + black outline so the shelf reads clearly against any
-    // part of the mountain.
+    // Light plank top edge + black outline so the shelf reads against any
+    // part of the mountain (grey peaks, brown massif or snow).
     if (l->type == LEDGE_NORMAL) {
-      graphics_context_set_stroke_color(ctx, GColorWhite);
+      graphics_context_set_stroke_color(ctx, GColorRajah);
       graphics_draw_line(ctx, GPoint((int16_t)(sx + 1), (int16_t)(sy + 1)),
                          GPoint((int16_t)(sx + l->w - 2), (int16_t)(sy + 1)));
     }
