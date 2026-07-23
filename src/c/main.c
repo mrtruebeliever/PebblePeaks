@@ -850,7 +850,7 @@ static void draw_bg_layer(GContext *ctx, GRect b, GBitmap *bmp,
 // snow-capped rock ranges (grey far, brown massif, dark near) receding by
 // speed. Ledges sit over it all.
 static void draw_background(GContext *ctx, GRect b) {
-  graphics_context_set_fill_color(ctx, GColorLightGray);   // soft grey sky
+  graphics_context_set_fill_color(ctx, GColorWhite);       // bright sky
   graphics_fill_rect(ctx, b, 0, GCornerNone);
   graphics_context_set_compositing_mode(ctx, GCompOpSet); // honour transparency
   draw_bg_layer(ctx, b, s_bg_far, 6, 1, 8);
