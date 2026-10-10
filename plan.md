@@ -86,10 +86,14 @@ Griffsohlen/Daunenjacke/Kletterseil), "Je hebt de top bereikt!".
    500-seed/30-verdieping Python-simulatie van de exacte fixed-point-fysica
    met 0 mislukkingen). Camera-scroll + procedurele richels + hoogte-teller
    + mist + game over.
-3. ✅ **Klaar, gebouwd + code-review**, **nog niet visueel getest** (een
-   aanhoudende emulator/display-storing aan de WSL-kant verhinderde dit —
-   zie Testnotities). Edelstenen + speciale richels + vallende stenen +
-   moeilijkheidscurve.
+3. ✅ **Klaar, gebouwd + code-review, weergave geverifieerd** (2026-10-11,
+   emery-emulator, tijdelijke build met `SPECIAL_LEDGE_MIN_M` en
+   `ROCK_MIN_M` op -300): edelstenen in meerdere kleuren, ijsrichels
+   (Celeste), brokkelrichels (BulgarianRose) en vallende stenen staan
+   allemaal in beeld. Het **gedrag** (ijs glijdt, brokkelrichel trilt en
+   verdwijnt, steen slaat je terug) is nog niet gezien: dat vraagt gericht
+   springen, geen blind up/down. Edelstenen + speciale richels + vallende
+   stenen + moeilijkheidscurve.
 4. Winkel + upgrades + top/victory (testen met RAM-cheat volgens COMMON.md,
    cheats daarna verwijderen!) + title/pauze/records. **Eerst milestone 3
    visueel bevestigen in de emulator voordat je hierop verder bouwt.**
@@ -129,7 +133,7 @@ Griffsohlen/Daunenjacke/Kletterseil), "Je hebt de top bereikt!".
 
 Volledig met press.py testbaar: `up`/`down` clicks om te springen (kopie
 staat al in `tools/press.py`). Voor de GIF: afwisselend up/down met sleeps.
-Game over forceren: niets doen (mist haalt je in ~30 s). Victory testen
+Game over forceren: niets doen (de mist start 60 px lager en stijgt 0,35 px/tick, dus hij haalt je in ~6 s; in de emulator zelfs ~4 s). Victory testen
 met RAM-override (upgrades max + top op 30 m TIJDELIJK) — zie de
 TEMP-procedure in COMMON.md.
 
