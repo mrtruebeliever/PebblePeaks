@@ -94,9 +94,22 @@ Griffsohlen/Daunenjacke/Kletterseil), "Je hebt de top bereikt!".
    verdwijnt, steen slaat je terug) is nog niet gezien: dat vraagt gericht
    springen, geen blind up/down. Edelstenen + speciale richels + vallende
    stenen + moeilijkheidscurve.
-4. Winkel + upgrades + top/victory (testen met RAM-cheat volgens COMMON.md,
-   cheats daarna verwijderen!) + title/pauze/records. **Eerst milestone 3
-   visueel bevestigen in de emulator voordat je hierop verder bouwt.**
+4. ✅ **Klaar, emulator-geverifieerd** (2026-10-11, TEMP-build met
+   upgrades in RAM, save uit, TEMP-regels daarna verwijderd). Winkel
+   (Gripzolen/Donsjack/Klimtouw, 15/40/90/160/250), Klimtouw op SELECT
+   (alleen in de lucht; terug naar de laatst verlaten richel, anders de
+   dichtstbijzijnde richel eronder boven de mist), **fysieke vlag** op een
+   brede topricht (`LEDGE_SUMMIT`, 64 px) zodra een verdieping `SUMMIT_M`
+   haalt: landen op de top → klimmer waggelt naar de vlag → `ST_VICTORY`;
+   mist stopt op de top. Persist 3–6 = grip/jacket/rope/found. Titel met
+   record, edelstenen en trofee-vlag; game-over met "Nieuw record!";
+   pauze-BACK bankt de edelstenen. Gezien in de emulator: winkel, ijsglijden
+   (val-pose), klimtouw, top + overwinningsscherm. Niet gezien: brokkelrichel
+   die verdwijnt, steen die je raakt.
+   **Graphics**: klimmer en vlag zijn pixel-art sprites in begin-jaren-90
+   Sega-stijl (`tools/sprites.py` → genereert `src/c/sprites.h`; poses
+   IDLE/LAND/JUMP/FALL, gespiegeld voor links). Richels: sneeuw op grijze
+   rots, ijs met ijspegels, gebarsten bruine brokkelrichel. Antialiasing uit.
 5. i18n + visuele taalcheck (DE) + tuning-speeltest; screenshots + GIF;
    release-fase na akkoord.
 
