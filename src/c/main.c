@@ -207,7 +207,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "SELECT · escalar", "ABAJO · tienda", "Récord: %ldm",
     "¡Congelado!", "Altura: %ldm", "¡Nuevo récord!", "Gemas: %ld", "SELECT · otra vez",
     "¡Has llegado a la cima!",
-    "Tienda", "Suelas de agarre", "Plumífero", "Cuerda",
+    "Tienda", "Botas de agarre", "Plumífero", "Cuerda",
     "Resbalas menos, aguantas más", "La niebla empieza más lejos", "SELECT: vuelve a la repisa",
     "SELECT · comprar   ATRÁS · cerrar", "La cima está a tu alcance...", "MÁX",
     "Pausa", "SELECT · seguir", "ATRÁS · salir",
@@ -939,25 +939,21 @@ static GColor gem_color(uint8_t idx) {
   }
 }
 
-static GPoint s_gem_pts[4];
-static GPathInfo s_gem_info = { .num_points = 4, .points = s_gem_pts };
-static GPath *s_gem_path;
+static const Sprite *const GEM_SPRITES[4] = { &SPR_GEM_M, &SPR_GEM_G, &SPR_GEM_Y, &SPR_GEM_P };
 
+// World gems: 9x10 sprites centred on (x, y) — the same point the pickup
+// radius is measured from. Each gem glints briefly every ~1.5 s, staggered.
 static void draw_gems(GContext *ctx, GRect b) {
-  graphics_context_set_stroke_color(ctx, GColorBlack);
   for (int i = 0; i < MAX_GEMS; i++) {
     const Gem *g = &s_gems[i];
     if (!g->active) continue;
     int16_t sy = (int16_t)(g->y - s_cam_y);
-    if (sy < -6 || sy > b.size.h) continue;
+    if (sy < -6 || sy > b.size.h + 6) continue;
     int16_t sx = g->x;
-    s_gem_pts[0] = GPoint(sx, (int16_t)(sy - 5));
-    s_gem_pts[1] = GPoint((int16_t)(sx + 4), sy);
-    s_gem_pts[2] = GPoint(sx, (int16_t)(sy + 5));
-    s_gem_pts[3] = GPoint((int16_t)(sx - 4), sy);
-    graphics_context_set_fill_color(ctx, gem_color(g->color_idx));
-    gpath_draw_filled(ctx, s_gem_path);
-    gpath_draw_outline(ctx, s_gem_path);
+    draw_sprite(ctx, GEM_SPRITES[g->color_idx % 4], (int16_t)(sx - 4), (int16_t)(sy - 5), false, 1);
+    if ((s_anim + i * 11) % 45 < 4) {
+      draw_sprite(ctx, &SPR_GEM_SPARKLE, (int16_t)(sx), (int16_t)(sy - 7), false, 1);
+    }
   }
 }
 
@@ -987,17 +983,16 @@ static void draw_sparks(GContext *ctx, GRect b) {
   }
 }
 
+// Boulders: 11x11 sprites centred on the rock, tumbling between two frames.
 static void draw_rocks(GContext *ctx, GRect b) {
-  graphics_context_set_fill_color(ctx, GColorDarkGray);
-  graphics_context_set_stroke_color(ctx, GColorBlack);
   for (int i = 0; i < MAX_ROCKS; i++) {
     const Rock *r = &s_rocks[i];
     if (!r->active) continue;
     int16_t sx = (int16_t)(r->x_fp >> FP);
     int16_t sy = (int16_t)((r->y_fp >> FP) - s_cam_y);
     if (sy < -ROCK_R || sy > b.size.h + ROCK_R) continue;
-    graphics_fill_circle(ctx, GPoint(sx, sy), ROCK_R);
-    graphics_draw_circle(ctx, GPoint(sx, sy), ROCK_R);
+    const Sprite *spr = ((s_anim / 4 + i) % 2) ? &SPR_ROCK1 : &SPR_ROCK0;
+    draw_sprite(ctx, spr, (int16_t)(sx - 5), (int16_t)(sy - 5), false, 1);
   }
 }
 
@@ -1029,13 +1024,9 @@ static void draw_mist(GContext *ctx, GRect b) {
   }
 }
 
+// Small 7x6 gem centred on (x, y), for the HUD, title, shop and end screens.
 static void draw_gem_icon(GContext *ctx, int16_t x, int16_t y) {
-  s_gem_pts[0] = GPoint(x, (int16_t)(y - 4));
-  s_gem_pts[1] = GPoint((int16_t)(x + 4), y);
-  s_gem_pts[2] = GPoint(x, (int16_t)(y + 4));
-  s_gem_pts[3] = GPoint((int16_t)(x - 4), y);
-  graphics_context_set_fill_color(ctx, GColorMagenta);
-  gpath_draw_filled(ctx, s_gem_path);
+  draw_sprite(ctx, &SPR_GEM_S, (int16_t)(x - 3), (int16_t)(y - 3), false, 1);
 }
 
 static void draw_hud(GContext *ctx, GRect b) {
@@ -1047,11 +1038,10 @@ static void draw_hud(GContext *ctx, GRect b) {
   graphics_draw_text(ctx, buf, s_f14, GRect(4, 1, 40, 16),
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 
-  // Rope rescues left: a little coil and a count.
+  // Rope rescues left: a little coil and a count (greyed out when used up).
   if (s_rope > 0) {
-    graphics_context_set_stroke_color(ctx, s_rope_left > 0 ? GColorChromeYellow : GColorDarkGray);
-    graphics_draw_circle(ctx, GPoint(48, 9), 4);
-    graphics_draw_circle(ctx, GPoint(48, 9), 2);
+    draw_sprite(ctx, &SPR_ICON_ROPE_S, 45, 6, false, 1);
+    graphics_context_set_text_color(ctx, s_rope_left > 0 ? GColorWhite : GColorDarkGray);
     snprintf(buf, sizeof(buf), "%d", s_rope_left);
     graphics_draw_text(ctx, buf, s_f14, GRect(55, 1, 14, 16),
                        GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
@@ -1228,6 +1218,7 @@ static void draw_shop(GContext *ctx, GRect b) {
 
   const char *names[3] = {S(S_ITEM_GRIP), S(S_ITEM_JACKET), S(S_ITEM_ROPE)};
   const char *descs[3] = {S(S_DESC_GRIP), S(S_DESC_JACKET), S(S_DESC_ROPE)};
+  static const Sprite *const icons[3] = {&SPR_ICON_BOOT, &SPR_ICON_JACKET, &SPR_ICON_ROPE};
   int8_t levels[3] = {s_grip, s_jacket, s_rope};
 
   for (int i = 0; i < 3; i++) {
@@ -1240,8 +1231,10 @@ static void draw_shop(GContext *ctx, GRect b) {
       graphics_draw_round_rect(ctx, card, 4);
     }
 
+    // Icon beside the name; the description runs full width underneath.
+    draw_sprite(ctx, icons[i], (int16_t)(card.origin.x + 4), (int16_t)(y + 4), false, 1);
     graphics_context_set_text_color(ctx, GColorWhite);
-    graphics_draw_text(ctx, names[i], s_f18b, GRect(card.origin.x + 6, y + 2, 130, 20),
+    graphics_draw_text(ctx, names[i], s_f18b, GRect(card.origin.x + 24, y + 2, 116, 20),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
     graphics_context_set_text_color(ctx, GColorCeleste);
     graphics_draw_text(ctx, descs[i], s_f14, GRect(card.origin.x + 6, y + 20, card.size.w - 12, 16),
@@ -1461,7 +1454,6 @@ static void init(void) {
   s_f24b = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   s_f28b = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
   s_mountain_path = gpath_create(&s_mountain_info);
-  s_gem_path = gpath_create(&s_gem_info);
 
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
@@ -1479,7 +1471,6 @@ static void deinit(void) {
   save_progress();
   app_focus_service_unsubscribe();
   gpath_destroy(s_mountain_path);
-  gpath_destroy(s_gem_path);
   window_destroy(s_window);
 }
 
