@@ -10,7 +10,8 @@ Jump ledge to ledge up a mountain with two buttons while freezing mist rises bel
 Pebble Peaks is a vertical arcade climber for the Pebble Time 2. UP jumps
 up-left, DOWN jumps up-right — once you're in the air, the arc is fixed, so
 every jump is a choice. Below you, icy mist keeps rising. Stand still too
-long and you're frozen.
+long and you're frozen. Climb from a sunny pine valley through the sunset
+into a starry night with northern lights, all the way to the summit.
 
 Higher up the mountain gets meaner: ice ledges slide you toward the edge,
 crumble ledges give way under your boots, and from 300 m boulders come
@@ -29,7 +30,11 @@ FEATURES
   on a ledge raises the hook — time the swinging aim (or tilt the watch) and
   fire at gem ledges out of jump reach. Find rope coils along the way.
 • A real ending: reach the summit at 1000 m and grab the flag.
-• Early-90s style pixel art made for the Pebble Time 2 (Emery) colour screen.
+• Early-90s style pixel art made for the Pebble Time 2 (Emery) colour screen,
+  with parallax mountains and a sky that runs from day to night.
+• Chip sound effects on the Time 2 speaker, and a backlight that takes the
+  colour of the sky and flashes red when the mist closes in.
+• Settings for backlight, light effects, vibration, sound and aiming.
 • Plays entirely offline — no phone app or internet needed.
 • Available in English, Nederlands, Français, Deutsch and Español, following
   your watch's system language automatically.
