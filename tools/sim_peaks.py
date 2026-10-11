@@ -227,7 +227,8 @@ class Game:
             if sl.w != 0 and sl.type == ICE:
                 self.cx += self.ice_dir * self.ice_slide()
                 c2 = self.cx >> FP
-                if c2 < sl.x or c2 > sl.x + sl.w: self.knock(self.ice_dir * 100, 'ice')
+                if (self.ice_dir < 0 and c2 < sl.x) or (self.ice_dir > 0 and c2 > sl.x + sl.w):
+                    self.knock(self.ice_dir * 100, 'ice')
             elif sl.w != 0 and sl.type == SUMMIT:
                 c2 = self.cx >> FP; dx = self.flag_x - c2
                 if -8 <= dx <= 8:

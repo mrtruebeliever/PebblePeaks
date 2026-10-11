@@ -1,25 +1,55 @@
 # Pebble Peaks
 
-Verticale klimmer voor de Pebble Time 2 (emery) — het zusje van
+Een verticale klimmer voor de Pebble Time 2 (emery), het zusje van
 [PebbleDiver](https://github.com/mrtruebeliever/PebbleDiver).
 
-Zie [`plan.md`](plan.md) voor het volledige ontwerp en [`COMMON.md`](COMMON.md)
-voor de gedeelde projectconventies.
+Spring van richel naar richel een berg op terwijl van onderaf ijskoude mist
+opstijgt. **OMHOOG** springt naar linksboven, **OMLAAG** naar rechtsboven,
+langs een vaste boog: in de lucht stuur je niet meer bij. Haal je de mist je
+in, dan ben je bevroren.
 
-**Status:** milestone 1 (skelet + klimmer + richels + sprongfysica),
-milestone 2 (camera-scroll + procedurele richels + hoogteteller + mist +
-game-over) en milestone 3 (edelstenen, brokkel-/ijsrichels, vallende stenen,
-moeilijkheidscurve) staan in `src/c/main.c`. Milestone 1 is volledig
-geverifieerd in de emulator (screenshots, sprongboog met press.py getest).
-Milestone 2's kernlogica (richel-generatie + landingsfysica) is rigoureus
-geverifieerd via een losse Python-simulatie van de exacte fixed-point-fysica
-(500 seeds × 30 verdiepingen, 0 mislukkingen) en bevestigd op het scherm
-(klimmer bereikte 3m en 6m met correcte landingen). Milestone 3 bouwt
-(schoon, RAM-budget ruim binnen limiet) en is zorgvuldig doorgenomen op
-correctheid, maar nog niet visueel getest in de emulator — een aanhoudende
-emulator/display-storing (WSL-kant) verhinderde dit aan het einde van deze
-sessie. Edelstenen-totaal en hoogterecord persisten al (`PK_GEMS`/`PK_BEST`),
-klaar voor de winkel in milestone 4.
+Het doel: op **1000 m** staat de top met een vlag. Land op de top, loop naar
+de vlag en pak hem; daarna staat de vlag naast je klimmer op het titelscherm.
+Realistisch lukt dat alleen met volledige uitrusting.
 
-Nog te doen: emulator-speeltest van milestone 3, milestone 4
-(winkel/upgrades/victory), milestone 5 (i18n + tuning + release).
+## Gameplay
+
+- **Richels:** besneeuwde rots; vanaf 150 m ook **ijs** (je glijdt naar de
+  rand) en **brokkelrichels** (trillen, zakken door en verdwijnen, en groeien
+  na 3 s terug). Hoe hoger, hoe smaller en verder uit elkaar.
+- **Vallende stenen** vanaf 300 m: een treffer gooit je van je richel.
+- **Mist** stijgt steeds sneller naarmate je hoger komt.
+- De lucht wordt donkerder met de hoogte, met sterren vanaf 600 m.
+- **Edelstenen** zijn de valuta en blijven bewaard tussen runs (ook als je
+  stopt via pauze → TERUG).
+
+## Winkel (OMLAAG vanaf titel of game-over)
+
+Drie upgrades, elk 5 niveaus, kosten 15/40/90/160/250 edelstenen:
+
+- **Gripzolen:** minder glijden op ijs, brokkelrichels houden langer.
+- **Donsjack:** de mist begint verder weg en stijgt trager.
+- **Klimtouw:** druk SELECT in de lucht om terug op je laatste richel
+  getrokken te worden; één keer per run per niveau.
+
+## Talen
+
+De app volgt de taal van het horloge: Engels (standaard), Nederlands, Frans,
+Duits en Spaans. De vertaaltabel staat bovenin `src/c/main.c`.
+
+## Ontwikkeling
+
+- `tools/sprites.py`: alle pixel-art (klimmer, vlag, edelstenen, stenen,
+  iconen); genereert `src/c/sprites.h`.
+- `tools/sim_peaks.py`: Python-port van de spellogica met een bot-speler voor
+  balans-tests; resultaten en keuzes in `tools/TUNING.md`.
+- `tools/gen_icon.py`, `tools/gen_marketing.py`: menu-icoon en store-art.
+- `tools/release.py`: bouwt `build/PebblePeaks-release.pbw` voor de store.
+- `tools/press.py`: knoppen in de emulator drukken.
+
+Zie [`plan.md`](plan.md) voor het ontwerp en [`COMMON.md`](COMMON.md) voor de
+gedeelde projectconventies.
+
+## Licentie
+
+MIT, zie [`LICENSE`](LICENSE).

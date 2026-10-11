@@ -618,7 +618,11 @@ static void game_tick(void *data) {
     if (sl->w != 0 && sl->type == LEDGE_ICE) {
       s_climber_x_fp += s_ice_dir * ice_slide_fp();
       int16_t cx2 = s_climber_x_fp >> FP;
-      if (cx2 < sl->x || cx2 > sl->x + sl->w) knock_off(s_ice_dir * 100);
+      // Only the edge you're sliding toward drops you: a landing that just
+      // overhangs the near edge slides onto the ice instead of off it.
+      if ((s_ice_dir < 0 && cx2 < sl->x) || (s_ice_dir > 0 && cx2 > sl->x + sl->w)) {
+        knock_off(s_ice_dir * 100);
+      }
     } else if (sl->w != 0 && sl->type == LEDGE_SUMMIT) {
       // On the top: walk over to the flag and grab it.
       int16_t cx2 = s_climber_x_fp >> FP;
@@ -862,7 +866,7 @@ static void draw_ledge(GContext *ctx, const Ledge *l, int16_t sx, int16_t sy) {
 // The summit stands on a mountain top that widens all the way down.
 static void draw_summit_mass(GContext *ctx, const Ledge *l, int16_t sx, int16_t sy) {
   int16_t cx = (int16_t)(sx + l->w / 2);
-  for (int16_t r = 0; r < 140 && sy + 8 + r < s_bounds.size.h; r += 2) {
+  for (int16_t r = 0; sy + 8 + r < s_bounds.size.h; r += 2) {
     int16_t half = (int16_t)(l->w / 2 - 2 + r / 2);
     fill(ctx, GColorBlack, cx - half - 1, sy + 8 + r, 2 * half + 2, 2);
     fill(ctx, GColorDarkGray, cx - half, sy + 8 + r, 2 * half, 2);
@@ -922,7 +926,8 @@ static GColor sky_color(int32_t height_m) {
 
 static void draw_stars(GContext *ctx, GRect b) {
   if (s_height_m < 600 && s_state != ST_VICTORY) return;
-  graphics_context_set_fill_color(ctx, GColorWhite);
+  // graphics_draw_pixel uses the stroke colour, not the fill colour.
+  graphics_context_set_stroke_color(ctx, GColorWhite);
   // Pseudo-random but stable star field, parallax-scrolled at 1/3 speed.
   int32_t par = (-s_cam_y) / 3;
   for (int i = 0; i < 14; i++) {
@@ -938,12 +943,12 @@ static GPoint s_mountain_pts[3];
 static GPathInfo s_mountain_info = { .num_points = 3, .points = s_mountain_pts };
 static GPath *s_mountain_path;
 
-static void draw_mountains(GContext *ctx, GRect b) {
+static void draw_mountains(GContext *ctx, GRect b, GColor color) {
   // Distant silhouette, scrolling at half camera speed for depth. Reuses a
   // single heap-allocated GPath (mutating its points) instead of
   // create/destroy per triangle per frame, to avoid needless heap churn.
   int32_t par = (-s_cam_y) / 2;
-  graphics_context_set_fill_color(ctx, GColorDukeBlue);
+  graphics_context_set_fill_color(ctx, color);
   int32_t period = 40;
   int32_t offset = par % period;
   for (int32_t px = -offset - period; px < b.size.w + period; px += period) {
@@ -1093,9 +1098,11 @@ static void draw_hud(GContext *ctx, GRect b) {
 }
 
 static void draw_game(GContext *ctx, GRect b) {
-  fill(ctx, sky_color(s_height_m), 0, 0, b.size.w, b.size.h);
+  GColor sky = sky_color(s_height_m);
+  fill(ctx, sky, 0, 0, b.size.w, b.size.h);
   draw_stars(ctx, b);
-  draw_mountains(ctx, b);
+  // DukeBlue peaks would vanish against the DukeBlue sky band.
+  draw_mountains(ctx, b, gcolor_equal(sky, GColorDukeBlue) ? GColorOxfordBlue : GColorDukeBlue);
 
   draw_ledges(ctx);
   draw_flag(ctx);
@@ -1148,7 +1155,7 @@ static void draw_scene_ledge(GContext *ctx, GRect b, int16_t x, int16_t y, int16
 
 static void draw_title(GContext *ctx, GRect b) {
   fill(ctx, GColorVividCerulean, 0, 0, b.size.w, b.size.h);
-  draw_mountains(ctx, b);
+  draw_mountains(ctx, b, GColorDukeBlue);
 
   draw_center_text(ctx, "Pebble Peaks", s_f28b, 4, 34, b, GColorWhite);
   char buf[40];
@@ -1328,7 +1335,10 @@ static void layer_update(Layer *layer, GContext *ctx) {
 // Input — UP jumps up-left, DOWN jumps up-right, SELECT throws the rope.
 // ---------------------------------------------------------------------------
 
+static AppTimer *s_flash_timer;
+
 static void shop_flash_end(void *data) {
+  s_flash_timer = NULL;
   s_shop_flash = 0;
   layer_mark_dirty(s_layer);
 }
@@ -1340,7 +1350,9 @@ static void try_buy(void) {
   int32_t cost = SHOP_COST[(int)cur];
   if (s_gems_total < cost) {
     s_shop_flash = 1;
-    app_timer_register(600, shop_flash_end, NULL);
+    // Restart the flash on every failed buy instead of stacking timers.
+    if (s_flash_timer) app_timer_cancel(s_flash_timer);
+    s_flash_timer = app_timer_register(600, shop_flash_end, NULL);
     vibes_double_pulse();
     layer_mark_dirty(s_layer);
     return;
