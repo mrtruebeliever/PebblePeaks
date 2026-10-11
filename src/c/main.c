@@ -1040,10 +1040,10 @@ static void draw_hud(GContext *ctx, GRect b) {
 
   // Rope rescues left: a little coil and a count (greyed out when used up).
   if (s_rope > 0) {
-    draw_sprite(ctx, &SPR_ICON_ROPE_S, 45, 6, false, 1);
+    draw_sprite(ctx, &SPR_ICON_ROPE_S, 44, 5, false, 1);
     graphics_context_set_text_color(ctx, s_rope_left > 0 ? GColorWhite : GColorDarkGray);
     snprintf(buf, sizeof(buf), "%d", s_rope_left);
-    graphics_draw_text(ctx, buf, s_f14, GRect(55, 1, 14, 16),
+    graphics_draw_text(ctx, buf, s_f14, GRect(56, 1, 14, 16),
                        GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
   }
 
