@@ -1335,48 +1335,220 @@ static void draw_flag(GContext *ctx) {
   draw_sprite(ctx, flag_frame(), (int16_t)(s_flag_x - 2), (int16_t)(sy - SPR_FLAG0.h), false, 1);
 }
 
-static GColor sky_color(int32_t height_m) {
-  if (height_m < 150) return GColorVividCerulean;
-  if (height_m < 350) return GColorCobaltBlue;
-  if (height_m < 600) return GColorDukeBlue;
-  return GColorOxfordBlue;
+// ---------------------------------------------------------------------------
+// Background, Sega style: a banded sky over parallax layers. The palette runs
+// from day through sunset and dusk to night as the climber nears the summit,
+// and the layers sink away below as they rise past them: a pine valley, a
+// near range, a far snowy range, with clouds drifting through and a sun that
+// sets, then a moon, stars and aurora at the top.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+  uint8_t sky[5];                  // top band to horizon (ARGB8)
+  uint8_t far_lit, far_shade;      // far range rock, sunlit / shaded flank
+  uint8_t snow_lit, snow_shade;
+  uint8_t near_lit, near_shade;
+  uint8_t cloud, cloud_shade;
+  uint32_t light;                  // backlight tint, 0x00RRGGBB (0 = system)
+} BgPalette;
+
+#define C(name) GColor##name##ARGB8
+static const BgPalette BG_PALETTES[5] = {
+  { // day, up to 200 m
+    { C(BlueMoon), C(VividCerulean), C(VividCerulean), C(PictonBlue), C(Celeste) },
+    C(BabyBlueEyes), C(Liberty), C(White), C(LightGray), C(CobaltBlue), C(DukeBlue),
+    C(White), C(Celeste), 0 },
+  { // afternoon, up to 400 m
+    { C(CobaltBlue), C(BlueMoon), C(VividCerulean), C(PictonBlue), C(BabyBlueEyes) },
+    C(BabyBlueEyes), C(Liberty), C(White), C(LightGray), C(DukeBlue), C(OxfordBlue),
+    C(White), C(BabyBlueEyes), 0xFFF0D8 },
+  { // sunset, up to 600 m
+    { C(Indigo), C(Purple), C(JazzberryJam), C(SunsetOrange), C(Rajah) },
+    C(RoseVale), C(ImperialPurple), C(Melon), C(RoseVale), C(ImperialPurple), C(OxfordBlue),
+    C(Melon), C(RoseVale), 0xFFC890 },
+  { // dusk, up to 800 m
+    { C(OxfordBlue), C(DukeBlue), C(Indigo), C(ImperialPurple), C(Purple) },
+    C(Liberty), C(OxfordBlue), C(BabyBlueEyes), C(Liberty), C(OxfordBlue), C(Black),
+    C(Liberty), C(ImperialPurple), 0xD8B8FF },
+  { // night, the last stretch
+    { C(Black), C(OxfordBlue), C(OxfordBlue), C(DukeBlue), C(DukeBlue) },
+    C(Liberty), C(OxfordBlue), C(BabyBlueEyes), C(Liberty), C(OxfordBlue), C(Black),
+    C(Liberty), C(DukeBlue), 0xA8C0FF },
+};
+#undef C
+
+static const int16_t SKY_BAND_Y[6] = { 0, 50, 95, 135, 170, 228 };
+
+static const BgPalette *bg_palette(int32_t height_m) {
+  int idx = height_m < 200 ? 0 : height_m < 400 ? 1 : height_m < 600 ? 2 : height_m < 800 ? 3 : 4;
+  return &BG_PALETTES[idx];
 }
 
-static void draw_stars(GContext *ctx, GRect b) {
-  if (s_height_m < 600 && s_state != ST_VICTORY) return;
-  // graphics_draw_pixel uses the stroke colour, not the fill colour.
-  graphics_context_set_stroke_color(ctx, GColorWhite);
-  // Pseudo-random but stable star field, parallax-scrolled at 1/3 speed.
-  int32_t par = (-s_cam_y) / 3;
-  for (int i = 0; i < 14; i++) {
+static GColor argb(uint8_t c) { return (GColor){ .argb = c }; }
+
+// Ridge heights per screen column, worked out once: each range is a row of
+// 45-degree peaks, a column's height the tallest peak over it, and its flank
+// lit when it faces the sun (to the right).
+#define BG_W 200
+static uint8_t s_far_h[BG_W], s_near_h[BG_W];
+static uint8_t s_far_lit[BG_W / 8 + 1], s_near_lit[BG_W / 8 + 1];
+
+static void build_range(uint8_t *heights, uint8_t *lit, int16_t spacing, int16_t min_h,
+                        int16_t var_h, uint32_t seed) {
+  for (int16_t x = 0; x < BG_W; x++) {
+    int16_t best = 0;
+    bool best_lit = false;
+    uint32_t s = seed;  // the same peaks for every column
+    for (int16_t px = (int16_t)(-spacing); px < BG_W + spacing; px += spacing) {
+      s = s * 1103515245u + 12345u;
+      int16_t jitter = (int16_t)((s >> 16) % (spacing / 2));
+      int16_t peak_x = (int16_t)(px + jitter);
+      int16_t peak_h = (int16_t)(min_h + (s >> 8) % var_h);
+      int16_t h = (int16_t)(peak_h - (x > peak_x ? x - peak_x : peak_x - x));
+      if (h > best) { best = h; best_lit = x >= peak_x; }
+    }
+    heights[x] = (uint8_t)(best > 0 ? best : 0);
+    if (best_lit) lit[x / 8] |= (uint8_t)(1 << (x % 8));
+  }
+}
+
+static void bg_init(void) {
+  build_range(s_far_h, s_far_lit, 46, 42, 34, 7u);
+  build_range(s_near_h, s_near_lit, 30, 18, 22, 91u);
+}
+
+// A range whose foot sits on base_y (screen), filled down to the bottom edge.
+// Snow covers whatever stands more than snowline px above the foot.
+static void draw_range(GContext *ctx, GRect b, const uint8_t *heights, const uint8_t *lit,
+                       int16_t base_y, int16_t snowline, GColor rock_lit, GColor rock_shade,
+                       GColor snow_lit, GColor snow_shade) {
+  for (int16_t x = 0; x < b.size.w && x < BG_W; x++) {
+    int16_t top = (int16_t)(base_y - heights[x]);
+    if (top >= b.size.h) continue;
+    bool sun = lit[x / 8] & (1 << (x % 8));
+    int16_t snow_end = top;
+    if (snowline > 0 && heights[x] > snowline) {
+      // A ragged snowline: a few px up or down per column.
+      snow_end = (int16_t)(base_y - snowline + ((x * 7) % 5) - 2);
+      fill(ctx, sun ? snow_lit : snow_shade, x, top, 1, (int16_t)(snow_end - top));
+    }
+    if (snow_end < top) snow_end = top;
+    fill(ctx, sun ? rock_lit : rock_shade, x, snow_end, 1, (int16_t)(b.size.h - snow_end));
+  }
+}
+
+// A puffy pixel cloud: a long body, a rounder top, a shaded underside.
+static void draw_cloud(GContext *ctx, int16_t x, int16_t y, int16_t w, GColor c, GColor shade) {
+  graphics_context_set_fill_color(ctx, shade);
+  graphics_fill_rect(ctx, GRect(x, (int16_t)(y + 2), w, 8), 4, GCornersAll);
+  graphics_context_set_fill_color(ctx, c);
+  graphics_fill_rect(ctx, GRect(x, y, w, 7), 3, GCornersAll);
+  graphics_fill_rect(ctx, GRect((int16_t)(x + w / 4), (int16_t)(y - 5), (int16_t)(w / 2), 9), 4, GCornersAll);
+}
+
+static void draw_stars(GContext *ctx, GRect b, int32_t rise) {
+  // Pseudo-random but stable, parallax-scrolled at 1/3 speed; a few twinkle.
+  int32_t par = rise / 3;
+  for (int i = 0; i < 24; i++) {
     int16_t sx = (int16_t)((i * 37 + 13) % b.size.w);
-    int16_t sy = (int16_t)(((i * 53 + 7) - par) % (b.size.h * 2));
+    int32_t sy = ((i * 53 + 7) + par) % (b.size.h * 2);
     if (sy < 0) sy += b.size.h * 2;
-    sy -= b.size.h; // spread across a taller virtual band so it feels endless
-    if (sy >= 0 && sy < b.size.h) graphics_draw_pixel(ctx, GPoint(sx, sy));
+    sy -= b.size.h / 2;
+    if (sy < 0 || sy >= b.size.h) continue;
+    bool twinkle = i % 5 == 0 && (s_anim / 6 + i) % 4 == 0;
+    if (twinkle) continue;
+    fill(ctx, i % 7 == 0 ? GColorPastelYellow : GColorWhite, sx, (int16_t)sy, 1, 1);
+    if (i % 9 == 0) {  // a few bigger ones, a little cross
+      fill(ctx, GColorLiberty, (int16_t)(sx - 1), (int16_t)sy, 3, 1);
+      fill(ctx, GColorLiberty, sx, (int16_t)(sy - 1), 1, 3);
+      fill(ctx, GColorWhite, sx, (int16_t)sy, 1, 1);
+    }
   }
 }
 
-static GPoint s_mountain_pts[3];
-static GPathInfo s_mountain_info = { .num_points = 3, .points = s_mountain_pts };
-static GPath *s_mountain_path;
-
-static void draw_mountains(GContext *ctx, GRect b, GColor color) {
-  // Distant silhouette, scrolling at half camera speed for depth. Reuses a
-  // single heap-allocated GPath (mutating its points) instead of
-  // create/destroy per triangle per frame, to avoid needless heap churn.
-  int32_t par = (-s_cam_y) / 2;
-  graphics_context_set_fill_color(ctx, color);
-  int32_t period = 40;
-  int32_t offset = par % period;
-  for (int32_t px = -offset - period; px < b.size.w + period; px += period) {
-    int idx = (int)((px + offset) / period);
-    int16_t peak_h = 16 + (int16_t)((idx * 29) % 14); // 16-30px
-    s_mountain_pts[0] = GPoint((int16_t)px, (int16_t)b.size.h);
-    s_mountain_pts[1] = GPoint((int16_t)(px + period / 2), (int16_t)(b.size.h - peak_h));
-    s_mountain_pts[2] = GPoint((int16_t)(px + period), (int16_t)b.size.h);
-    gpath_draw_filled(ctx, s_mountain_path);
+// Northern lights: two wavy curtains drifting across the top of the sky.
+static void draw_aurora(GContext *ctx, GRect b) {
+  for (int16_t x = 0; x < b.size.w; x += 2) {
+    int32_t a = TRIG_MAX_ANGLE * ((x * 2 + s_anim * 3) % 360) / 360;
+    int32_t a2 = TRIG_MAX_ANGLE * ((x * 3 - s_anim * 2 + 90) % 360) / 360;
+    int16_t y = (int16_t)(40 + sin_lookup(a) * 7 / TRIG_MAX_RATIO + sin_lookup(a2) * 4 / TRIG_MAX_RATIO);
+    fill(ctx, GColorMediumSpringGreen, x, y, 1, 3);
+    fill(ctx, GColorJaegerGreen, x, (int16_t)(y + 3), 1, 6);
+    fill(ctx, GColorMidnightGreen, x, (int16_t)(y + 9), 1, 4);
   }
+}
+
+// The sun climbs down the sky as the climber goes up: high in the day,
+// sinking and swelling orange through the sunset, gone by dusk. At night a
+// crescent moon instead.
+static void draw_sun_or_moon(GContext *ctx, const BgPalette *pal, int32_t height_m) {
+  if (height_m >= 800) {
+    graphics_context_set_fill_color(ctx, GColorPastelYellow);
+    graphics_fill_circle(ctx, GPoint(42, 58), 8);
+    graphics_context_set_fill_color(ctx, argb(pal->sky[1]));
+    graphics_fill_circle(ctx, GPoint(46, 55), 7);
+    return;
+  }
+  if (height_m >= 620) return;
+  int16_t y = (int16_t)(height_m < 400 ? 48 + height_m / 10 : 88 + (height_m - 400) * 9 / 20);
+  int16_t r = (int16_t)(height_m < 400 ? 9 : 12);
+  GColor halo = height_m < 400 ? GColorIcterine : GColorChromeYellow;
+  GColor disc = height_m < 400 ? GColorYellow : GColorOrange;
+  graphics_context_set_fill_color(ctx, halo);
+  graphics_fill_circle(ctx, GPoint(150, y), (uint16_t)(r + 2));
+  graphics_context_set_fill_color(ctx, disc);
+  graphics_fill_circle(ctx, GPoint(150, y), (uint16_t)r);
+}
+
+// rise: px climbed so far (camera), for the layers' parallax.
+static void draw_background(GContext *ctx, GRect b, int32_t height_m, int32_t rise) {
+  const BgPalette *pal = bg_palette(height_m);
+  for (int i = 0; i < 5; i++) {
+    fill(ctx, argb(pal->sky[i]), 0, SKY_BAND_Y[i], b.size.w,
+         (int16_t)(SKY_BAND_Y[i + 1] - SKY_BAND_Y[i]));
+  }
+  if (height_m >= 600) draw_stars(ctx, b, rise);
+  if (height_m >= 800) draw_aurora(ctx, b);
+  draw_sun_or_moon(ctx, pal, height_m);
+
+  // Far snowy range: sinks 1 px per 72 climbed, so its tips stay in view
+  // until dusk, far below.
+  draw_range(ctx, b, s_far_h, s_far_lit, (int16_t)(170 + rise / 72), 34,
+             argb(pal->far_lit), argb(pal->far_shade), argb(pal->snow_lit), argb(pal->snow_shade));
+
+  // Clouds drift sideways and slide down past the climber at 1/3 speed.
+  for (int i = 0; i < 4; i++) {
+    int16_t w = (int16_t)(26 + (i * 11) % 18);
+    int32_t span = b.size.w + 80;
+    int32_t cx = ((i * 71 + 30) + s_anim / (4 + i)) % span - 40;
+    int32_t cy = ((i * 97 + 20) + rise / 3) % 340 - 60;
+    if (cy < -10 || cy > b.size.h) continue;
+    draw_cloud(ctx, (int16_t)cx, (int16_t)cy, w, argb(pal->cloud), argb(pal->cloud_shade));
+  }
+
+  // Near range and the pine valley at its foot, sinking 1 px per 12
+  // climbed: gone after the first 60 m or so.
+  int16_t near_base = (int16_t)(205 + rise / 12);
+  if (near_base - 40 < b.size.h) {
+    draw_range(ctx, b, s_near_h, s_near_lit, near_base, 0,
+               argb(pal->near_lit), argb(pal->near_shade), GColorClear, GColorClear);
+    for (int16_t x = 4; x < b.size.w; x += 15) {
+      int16_t foot = (int16_t)(near_base + 6 + (x * 13) % 9);
+      draw_sprite(ctx, &SPR_PINE, (int16_t)(x + (x * 7) % 5), (int16_t)(foot - SPR_PINE.h), false, 1);
+    }
+  }
+}
+
+// Backlight tint: the time of day, red pulses when the mist is about to
+// catch the climber, gold on the summit. Only sent when it changes; the
+// system restores the user's colour when the app closes.
+static uint32_t s_light_rgb = 0xFFFFFFFF;
+
+static void set_light_tint(uint32_t rgb) {
+  if (rgb == s_light_rgb) return;
+  s_light_rgb = rgb;
+  if (rgb == 0) light_set_system_color();
+  else light_set_color_rgb888(rgb);
 }
 
 static GColor gem_color(uint8_t idx) {
@@ -1522,11 +1694,7 @@ static void draw_hud(GContext *ctx, GRect b) {
 }
 
 static void draw_game(GContext *ctx, GRect b) {
-  GColor sky = sky_color(s_height_m);
-  fill(ctx, sky, 0, 0, b.size.w, b.size.h);
-  draw_stars(ctx, b);
-  // DukeBlue peaks would vanish against the DukeBlue sky band.
-  draw_mountains(ctx, b, gcolor_equal(sky, GColorDukeBlue) ? GColorOxfordBlue : GColorDukeBlue);
+  draw_background(ctx, b, s_height_m, -s_cam_y);
 
   draw_ledges(ctx);
   draw_flag(ctx);
@@ -1627,8 +1795,7 @@ static void draw_scene_ledge(GContext *ctx, GRect b, int16_t x, int16_t y, int16
 }
 
 static void draw_title(GContext *ctx, GRect b) {
-  fill(ctx, GColorVividCerulean, 0, 0, b.size.w, b.size.h);
-  draw_mountains(ctx, b, GColorDukeBlue);
+  draw_background(ctx, b, 0, 0);
 
   draw_center_text(ctx, "Pebble Peaks", s_f28b, 4, 34, b, GColorWhite);
   char buf[40];
@@ -1676,8 +1843,7 @@ static void draw_gameover(GContext *ctx, GRect b) {
 }
 
 static void draw_victory(GContext *ctx, GRect b) {
-  fill(ctx, GColorOxfordBlue, 0, 0, b.size.w, b.size.h);
-  draw_stars(ctx, b);
+  draw_background(ctx, b, SUMMIT_M, 9000);
   draw_center_text(ctx, S(S_WIN_TITLE), s_f24b, 4, 56, b, GColorPastelYellow);
 
   // Summit scene: the climber hopping for joy beside the planted flag.
@@ -1778,6 +1944,17 @@ static void layer_update(Layer *layer, GContext *ctx) {
   GRect b = layer_get_bounds(layer);
   // Hard pixel edges throughout, for the 16-bit look (and cheaper paths).
   graphics_context_set_antialiased(ctx, false);
+  // Backlight tint (see set_light_tint): the sky's time of day while
+  // climbing, pulsing red once the mist gauge goes red, gold on the summit.
+  uint32_t tint = 0;
+  if (s_state == ST_PLAYING || s_state == ST_PAUSED) {
+    tint = bg_palette(s_height_m)->light;
+    int32_t gap = (s_mist_top_fp >> FP) - (s_climber_y_fp >> FP);
+    if (s_state == ST_PLAYING && gap < 30 && (s_anim / 8) % 2) tint = 0xFF4040;
+  } else if (s_state == ST_VICTORY) {
+    tint = 0xFFD860;
+  }
+  set_light_tint(tint);
   switch (s_state) {
     case ST_PLAYING:
       draw_game(ctx, b);
@@ -1985,7 +2162,7 @@ static void init(void) {
   s_f18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
   s_f24b = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
   s_f28b = fonts_get_system_font(FONT_KEY_GOTHIC_28_BOLD);
-  s_mountain_path = gpath_create(&s_mountain_info);
+  bg_init();
 
   s_window = window_create();
   window_set_click_config_provider(s_window, click_config);
@@ -2002,7 +2179,6 @@ static void deinit(void) {
   if (s_state == ST_PLAYING || s_state == ST_PAUSED) finish_run();
   save_progress();
   app_focus_service_unsubscribe();
-  gpath_destroy(s_mountain_path);
   window_destroy(s_window);
 }
 

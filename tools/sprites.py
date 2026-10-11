@@ -404,6 +404,22 @@ EXTRA = {
     "ROCK1": ROCK1,
 }
 
+# A pine for the valley at the foot of the mountain (background, so no
+# black outline: just two greens and a stub of trunk).
+EXTRA["PINE"] = [
+    "...p...",
+    "..pPp..",
+    "..pPp..",
+    ".pPPPp.",
+    "..pPp..",
+    ".pPPPp.",
+    "pPPPPPp",
+    ".pPPPp.",
+    "pPPPPPp",
+    "ppPPPpp",
+    "...N...",
+]
+
 # The rope climb turned on its side, glove end to the right, for ropes
 # flatter than 45 degrees: the climber lies along the rope instead.
 EXTRA["CLIMB_SIDE"] = rotate90(FRAMES["CLIMB"])
