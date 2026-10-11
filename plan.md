@@ -110,8 +110,11 @@ Griffsohlen/Daunenjacke/Kletterseil), "Je hebt de top bereikt!".
    Sega-stijl (`tools/sprites.py` → genereert `src/c/sprites.h`; poses
    IDLE/LAND/JUMP/FALL, gespiegeld voor links). Richels: sneeuw op grijze
    rots, ijs met ijspegels, gebarsten bruine brokkelrichel. Antialiasing uit.
-5. i18n + visuele taalcheck (DE) + tuning-speeltest; screenshots + GIF;
-   release-fase na akkoord.
+5. ✅ **Klaar op de hardware-speeltest na** (2026-10-11): i18n (5 talen, alle
+   schermen per taal gecheckt), tuning via `tools/sim_peaks.py`, QA-ronde met
+   4 bugfixes, store-screenshots + demo-GIF, CHANGELOG/LICENSE/README/store-tekst,
+   `build/PebblePeaks-release.pbw`. Nog open: speeltest op de Time 2, akkoord
+   van de gebruiker, dan push + store-upload.
 
 ## Implementatienotities voor milestone 4 (stand van zaken in main.c)
 
