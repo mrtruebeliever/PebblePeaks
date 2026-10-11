@@ -15,7 +15,8 @@ long and you're frozen.
 Higher up the mountain gets meaner: ice ledges slide you toward the edge,
 crumble ledges give way under your boots, and from 300 m boulders come
 tumbling down. Gems carry over between runs; spend them on grip soles, a
-down jacket and a climbing rope that pulls you back up when you miss. And at
+down jacket and a climbing rope: a grappling hook that saves a missed jump or
+reaches gem ledges too far to jump to. And at
 1000 m, a flag waits on the summit — but only a fully equipped climber will
 realistically get there.
 
@@ -24,7 +25,8 @@ FEATURES
 • Rising mist that speeds up the higher you climb.
 • Snowy rock, slippery ice and crumbling ledges; falling boulders from 300 m.
 • Gems persist between runs — three upgrades with five levels each.
-• Climbing rope: press SELECT mid-air to be hauled back to your last ledge.
+• Climbing rope: SELECT mid-air hooks a ledge and you climb back up; SELECT
+  on a ledge raises the hook — tilt the watch to aim, SELECT to fire.
 • A real ending: reach the summit at 1000 m and grab the flag.
 • Early-90s style pixel art made for the Pebble Time 2 (Emery) colour screen.
 • Plays entirely offline — no phone app or internet needed.

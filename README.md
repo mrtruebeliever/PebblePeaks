@@ -29,8 +29,12 @@ Drie upgrades, elk 5 niveaus, kosten 15/40/90/160/250 edelstenen:
 
 - **Gripzolen:** minder glijden op ijs, brokkelrichels houden langer.
 - **Donsjack:** de mist begint verder weg en stijgt trager.
-- **Klimtouw:** druk SELECT in de lucht om terug op je laatste richel
-  getrokken te worden; één keer per run per niveau.
+- **Klimtouw:** een enterhaak, één keer per run per niveau.
+  - SELECT in de lucht: de haak grijpt een richel midden op het scherm en
+    je klimt langs het touw omhoog.
+  - SELECT op een richel: richten door het horloge te kantelen, SELECT
+    schiet, TERUG annuleert. Zo haal je edelsteenrichels die te ver weg
+    hangen om te springen. Mis je, dan ben je het touw kwijt.
 
 ## Talen
 

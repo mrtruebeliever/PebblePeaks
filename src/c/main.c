@@ -111,7 +111,7 @@ static int8_t s_shop_flash;               // "not enough gems" flash
 static int8_t s_rope_left;     // rescues left this run
 // A rescue plays out in two steps: the hook flies up to a ledge near the
 // middle of the screen, then the climber hauls themself up the rope.
-typedef enum { ROPE_IDLE, ROPE_SHOOT, ROPE_CLIMB } RopePhase;
+typedef enum { ROPE_IDLE, ROPE_SHOOT, ROPE_CLIMB, ROPE_MISS } RopePhase;
 static RopePhase s_rope_phase;
 static int16_t s_rope_ledge;          // ledge the hook caught
 static int16_t s_rope_ledge_y;        // ...and its y, to notice a recycled slot
@@ -119,6 +119,22 @@ static int16_t s_rope_ax, s_rope_ay;  // anchor on that ledge's lip, world coord
 static int16_t s_hook_len, s_hook_dist; // hook flight so far / in total (px)
 #define HOOK_SPEED 18                 // px per tick the hook flies
 #define ROPE_CLIMB_SPEED 6            // px per tick hauling up the rope
+#define ROPE_RANGE 130                // how far an aimed shot reaches (px)
+
+// Aimed shots: SELECT while standing raises the hook, tilting the watch
+// swings the aim, SELECT fires. s_aim_angle is a Pebble trig angle off
+// straight up, negative to the left.
+static bool s_aiming;
+static int32_t s_aim_angle;
+#define AIM_MAX_ANGLE (TRIG_MAX_ANGLE * 70 / 360)
+#define AIM_FULL_TILT 700             // milli-g of sideways tilt for full aim
+
+// Gem ledges: while there's rope left, now and then a ledge hangs out of
+// jump reach off to the side, carrying a row of gems — worth a shot.
+#define GEM_LEDGE_MIN_M 30
+#define GEM_LEDGE_CHANCE 15           // % per floor
+#define GEM_LEDGE_W 36
+#define GEM_LEDGE_RISE 18             // px above the floor it sits beside
 
 #define MAX_SPARKS 4
 #define SPARK_TICKS 12
@@ -171,7 +187,7 @@ enum {
   S_WIN_TITLE,
   S_SHOP_TITLE, S_ITEM_GRIP, S_ITEM_JACKET, S_ITEM_ROPE,
   S_DESC_GRIP, S_DESC_JACKET, S_DESC_ROPE, S_SHOP_HINT, S_SUMMIT_NEAR, S_MAX,
-  S_PAUSED, S_HINT_RESUME, S_HINT_QUIT,
+  S_PAUSED, S_HINT_RESUME, S_HINT_QUIT, S_AIM_HINT,
   NUM_STRS
 };
 
@@ -181,45 +197,50 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "Frozen!", "Highest: %ldm", "New record!", "Gems: %ld", "SELECT · again",
     "You reached the summit!",
     "Shop", "Grip soles", "Down jacket", "Climbing rope",
-    "Less sliding and crumbling", "Mist starts further away", "SELECT: back to a ledge",
+    "Less sliding and crumbling", "Mist starts further away", "SELECT: hook onto a ledge",
     "SELECT · buy    BACK · close", "The summit is within reach...", "MAX",
     "Paused", "SELECT · resume", "BACK · quit",
+    "Tilt to aim · SELECT fires",
   },
   [L_NL] = {
     "SELECT · klimmen", "OMLAAG · winkel", "Record: %ldm",
     "Bevroren!", "Hoogste: %ldm", "Nieuw record!", "Edelstenen: %ld", "SELECT · opnieuw",
     "Je hebt de top bereikt!",
     "Winkel", "Gripzolen", "Donsjack", "Klimtouw",
-    "Minder glijden en brokkelen", "Mist begint verder weg", "SELECT: terug naar richel",
+    "Minder glijden en brokkelen", "Mist begint verder weg", "SELECT: haak aan een richel",
     "SELECT · kopen    TERUG · sluiten", "De top ligt binnen bereik...", "MAX",
     "Pauze", "SELECT · verder", "TERUG · stoppen",
+    "Kantel om te richten · SELECT",
   },
   [L_FR] = {
     "SELECT · grimper", "BAS · boutique", "Record : %ldm",
     "Gelé !", "Altitude : %ldm", "Nouveau record !", "Gemmes : %ld", "SELECT · rejouer",
     "Tu as atteint le sommet !",
     "Boutique", "Semelles grip", "Doudoune", "Corde",
-    "Moins de glisse et d'éboulis", "La brume part de plus loin", "SELECT : retour au rebord",
+    "Moins de glisse et d'éboulis", "La brume part de plus loin", "SELECT : accroche un rebord",
     "SELECT · acheter   RETOUR · fermer", "Le sommet est à portée...", "MAX",
     "Pause", "SELECT · reprendre", "RETOUR · quitter",
+    "Inclinez pour viser · SELECT",
   },
   [L_DE] = {
     "SELECT · klettern", "RUNTER · Laden", "Rekord: %ldm",
     "Erfroren!", "Höhe: %ldm", "Neuer Rekord!", "Edelsteine: %ld", "SELECT · nochmal",
     "Du hast den Gipfel erreicht!",
     "Laden", "Griffsohlen", "Daunenjacke", "Kletterseil",
-    "Weniger Rutschen, Bröckeln", "Nebel startet weiter weg", "SELECT: zurück zum Sims",
+    "Weniger Rutschen, Bröckeln", "Nebel startet weiter weg", "SELECT: Sims einhaken",
     "SELECT · kaufen  ZURÜCK · schließen", "Der Gipfel ist in Reichweite...", "MAX",
     "Pausiert", "SELECT · weiter", "ZURÜCK · beenden",
+    "Kippen zum Zielen · SELECT",
   },
   [L_ES] = {
     "SELECT · escalar", "ABAJO · tienda", "Récord: %ldm",
     "¡Congelado!", "Altura: %ldm", "¡Nuevo récord!", "Gemas: %ld", "SELECT · otra vez",
     "¡Has llegado a la cima!",
     "Tienda", "Botas de agarre", "Plumífero", "Cuerda",
-    "Resbalas menos, aguantas más", "La niebla empieza más lejos", "SELECT: vuelve a la repisa",
+    "Resbalas menos, aguantas más", "La niebla empieza más lejos", "SELECT: engancha una repisa",
     "SELECT · comprar   ATRÁS · cerrar", "La cima está a tu alcance...", "MÁX",
     "Pausa", "SELECT · seguir", "ATRÁS · salir",
+    "Inclina para apuntar · SELECT",
   },
 };
 
@@ -308,8 +329,7 @@ static uint8_t pick_ledge_type(int32_t world_y) {
   return (rand() % 2) ? LEDGE_ICE : LEDGE_CRUMBLE;
 }
 
-static void maybe_spawn_gem(int16_t cx, int16_t ledge_y) {
-  if (rand() % 100 >= 40) return;
+static void spawn_gem(int16_t cx, int16_t ledge_y) {
   for (int i = 0; i < MAX_GEMS; i++) {
     if (!s_gems[i].active) {
       s_gems[i].active = true;
@@ -319,6 +339,34 @@ static void maybe_spawn_gem(int16_t cx, int16_t ledge_y) {
       return;
     }
   }
+}
+
+static void maybe_spawn_gem(int16_t cx, int16_t ledge_y) {
+  if (rand() % 100 < 40) spawn_gem(cx, ledge_y);
+}
+
+// A gem ledge goes on the far side of the screen, GEM_LEDGE_RISE above the
+// floor just generated. That's beyond the jump apex from the floor below,
+// and far enough sideways that no spot on this floor reaches it either
+// (half widths + ~32 px of arc reach at that rise + the climber's radius).
+// Like the bonus ledge it is never a reachability anchor.
+static void maybe_place_gem_ledge(int32_t center, int16_t half_w, int32_t floor_y) {
+  if (s_rope_left <= 0 || height_from_world_y(floor_y) < GEM_LEDGE_MIN_M) return;
+  if (rand() % 100 >= GEM_LEDGE_CHANCE) return;
+  int32_t half_b = GEM_LEDGE_W / 2;
+  int32_t cb = center < s_bounds.size.w / 2 ? s_bounds.size.w - half_b - 6 : half_b + 6;
+  int32_t gap = cb > center ? cb - center : center - cb;
+  if (gap < half_w + half_b + 40) return;
+  Ledge *slot = find_free_ledge_slot();
+  if (!slot) return;
+  slot->x = (int16_t)(cb - half_b);
+  slot->y = (int16_t)(floor_y - GEM_LEDGE_RISE);
+  slot->w = GEM_LEDGE_W;
+  slot->type = LEDGE_NORMAL;
+  slot->crumble_ticks = -1;
+  // Bunched up: a shot at a ledge this narrow lands mid-ledge (see
+  // fire_aimed_rope), within pickup range of all three.
+  for (int k = -1; k <= 1; k++) spawn_gem((int16_t)(cb + k * 6), slot->y);
 }
 
 // Generates the next floor above s_gen_top_y. The center is always within
@@ -365,6 +413,7 @@ static void generate_floor(void) {
   // Occasional bonus ledge on the same floor, purely decorative — it does
   // not become the reachability anchor, so the main staircase stays intact
   // even if there's no free slot left for it.
+  bool bonus = false;
   if (rand() % 100 < 30) {
     int32_t center2 = center - dir * (2 * reach);
     if (center2 < min_c) center2 = min_c;
@@ -378,9 +427,12 @@ static void generate_floor(void) {
         slot2->type = pick_ledge_type(next_y);
         slot2->crumble_ticks = -1;
         maybe_spawn_gem((int16_t)center2, (int16_t)next_y);
+        bonus = true;
       }
     }
   }
+  // Not next to a bonus ledge, which could be a stepping stone to it.
+  if (!bonus) maybe_place_gem_ledge(center, half_w, next_y);
 
   s_gen_ref_x = (int16_t)center;
   s_gen_top_y = next_y;
@@ -415,6 +467,7 @@ static void start_run(void) {
   s_summit_placed = false;
   s_rope_left = s_rope;
   s_rope_phase = ROPE_IDLE;
+  s_aiming = false;
   s_gem_flash = 0;
   for (int i = 0; i < MAX_SPARKS; i++) s_sparks[i].ticks = 0;
   s_tumbling = false;
@@ -447,7 +500,14 @@ static void start_run(void) {
 
 // Banks the run's gems and height record. Every way out of a run goes
 // through here, so quitting from the pause screen keeps the gems too.
+static void stop_aim(void) {
+  if (!s_aiming) return;
+  s_aiming = false;
+  accel_data_service_unsubscribe();
+}
+
 static void finish_run(void) {
+  stop_aim();
   s_gems_total += s_gems_run;
   s_last_gems = s_gems_run;
   s_gems_run = 0;
@@ -509,6 +569,120 @@ static void try_jump(int8_t dir) {
   layer_mark_dirty(s_layer);
 }
 
+static int16_t cheb_dist(int32_t dx, int32_t dy) {
+  if (dx < 0) dx = -dx;
+  if (dy < 0) dy = -dy;
+  int32_t d = dx > dy ? dx : dy;
+  return (int16_t)(d < 1 ? 1 : d);
+}
+
+// The climber's gloves, where the rope leaves from.
+static int16_t hand_y(void) {
+  return (int16_t)((s_climber_y_fp >> FP) - SPR_CLIMB.h + 2);
+}
+
+// Sends the hook flying at ledge idx, caught on its lip near x; the climber
+// hangs off the rope from here on. Spends one rope.
+static void begin_rope(int idx, int16_t x) {
+  const Ledge *l = &s_ledges[idx];
+  s_rope_left--;
+  s_rope_phase = ROPE_SHOOT;
+  s_rope_ledge = (int16_t)idx;
+  s_rope_ledge_y = l->y;
+  int16_t lo = (int16_t)(l->x + 6), hi = (int16_t)(l->x + l->w - 6);
+  if (lo > hi) lo = hi = (int16_t)(l->x + l->w / 2);
+  s_rope_ax = x < lo ? lo : (x > hi ? hi : x);
+  s_rope_ay = l->y;
+  s_hook_dist = cheb_dist(s_rope_ax - (s_climber_x_fp >> FP), hand_y() - l->y);
+  s_hook_len = 0;
+  s_airborne = true;
+  s_standing_ledge_idx = -1;
+  s_bounced = false;
+  s_vx_fp = 0;
+  s_vy_fp = 0;
+  s_tumbling = false;
+  vibes_short_pulse();
+  layer_mark_dirty(s_layer);
+}
+
+static bool can_aim(void) {
+  return s_state == ST_PLAYING && !s_airborne && s_rope_left > 0 &&
+         s_rope_phase == ROPE_IDLE && s_standing_ledge_idx >= 0 &&
+         s_ledges[s_standing_ledge_idx].type != LEDGE_SUMMIT;
+}
+
+static void start_aim(void) {
+  if (!can_aim() || s_aiming) return;
+  s_aiming = true;
+  s_aim_angle = 0;
+  accel_data_service_subscribe(0, NULL);  // just for accel_service_peek
+  layer_mark_dirty(s_layer);
+}
+
+// Walks the aim ray out from the shoulders, up to ROPE_RANGE, the screen
+// edges or the HUD. Returns the first ledge above the climber it meets
+// (*x, *y = where), or -1 with *x, *y at the end of the ray.
+static int aim_trace(int16_t *x, int16_t *y) {
+  int32_t feet_y = s_climber_y_fp >> FP;
+  int32_t ox = s_climber_x_fp >> FP, oy = feet_y - 20;
+  int32_t dx = sin_lookup(s_aim_angle), dy = -cos_lookup(s_aim_angle);
+  *x = (int16_t)ox;
+  *y = (int16_t)oy;
+  for (int32_t t = 6; t <= ROPE_RANGE; t += 3) {
+    int32_t px = ox + dx * t / TRIG_MAX_RATIO, py = oy + dy * t / TRIG_MAX_RATIO;
+    if (px < 0 || px >= s_bounds.size.w || py - s_cam_y < 36) return -1;
+    *x = (int16_t)px;
+    *y = (int16_t)py;
+    for (int i = 0; i < MAX_LEDGES; i++) {
+      const Ledge *l = &s_ledges[i];
+      if (l->w == 0 || l->type == LEDGE_GONE || i == s_standing_ledge_idx) continue;
+      if (l->y > feet_y - 8) continue;
+      if (px >= l->x && px < l->x + l->w && py >= l->y - 3 && py <= l->y + 9) {
+        *y = l->y;
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+// SELECT while aiming: a hit hauls the climber up to that ledge, a miss
+// still costs the rope — the hook flies out and reels back in.
+static void fire_aimed_rope(void) {
+  int16_t x, y;
+  int idx = aim_trace(&x, &y);
+  stop_aim();
+  if (idx >= 0) {
+    const Ledge *l = &s_ledges[idx];
+    if (l->w <= GEM_LEDGE_W) x = (int16_t)(l->x + l->w / 2);
+    begin_rope(idx, x);
+    return;
+  }
+  s_rope_left--;
+  s_rope_phase = ROPE_MISS;
+  s_rope_ax = x;
+  s_rope_ay = (int16_t)(y + 1);  // drawn 1 px up, like a hook on a lip
+  s_hook_dist = cheb_dist(x - (s_climber_x_fp >> FP), hand_y() - y);
+  s_hook_len = 0;
+  vibes_short_pulse();
+  layer_mark_dirty(s_layer);
+}
+
+static void aim_tick(void) {
+  if (!s_aiming) return;
+  if (!can_aim()) {  // knocked off, slid off the ice...
+    stop_aim();
+    return;
+  }
+  AccelData a;
+  if (accel_service_peek(&a) != 0) return;
+  int32_t tilt = a.x;
+  if (tilt > AIM_FULL_TILT) tilt = AIM_FULL_TILT;
+  if (tilt < -AIM_FULL_TILT) tilt = -AIM_FULL_TILT;
+  int32_t target = tilt * AIM_MAX_ANGLE / AIM_FULL_TILT;
+  s_aim_angle += (target - s_aim_angle) / 3;  // steady the wobble
+}
+
 // Climbing rope: while airborne, SELECT fires the hook at the ledge nearest
 // the middle of the screen (above the climber, on screen and clear of the
 // HUD, so the rescue always ends in view), then the climber climbs it.
@@ -532,28 +706,15 @@ static void try_rope(void) {
     vibes_double_pulse();
     return;
   }
-  const Ledge *l = &s_ledges[idx];
-  s_rope_left--;
-  s_rope_phase = ROPE_SHOOT;
-  s_rope_ledge = (int16_t)idx;
-  s_rope_ledge_y = l->y;
   // Hook the lip straight above the climber where possible.
-  int16_t cx = s_climber_x_fp >> FP;
-  int16_t lo = (int16_t)(l->x + 6), hi = (int16_t)(l->x + l->w - 6);
-  if (lo > hi) lo = hi = (int16_t)(l->x + l->w / 2);
-  s_rope_ax = cx < lo ? lo : (cx > hi ? hi : cx);
-  s_rope_ay = l->y;
-  int16_t dx = (int16_t)(s_rope_ax - cx), dy = (int16_t)(feet_y - SPR_CLIMB.h - l->y);
-  if (dx < 0) dx = (int16_t)-dx;
-  if (dy < 0) dy = (int16_t)-dy;
-  s_hook_dist = dx > dy ? dx : dy;
-  if (s_hook_dist < 1) s_hook_dist = 1;
-  s_hook_len = 0;
-  s_vx_fp = 0;
-  s_vy_fp = 0;
-  s_tumbling = false;
-  vibes_short_pulse();
-  layer_mark_dirty(s_layer);
+  begin_rope(idx, s_climber_x_fp >> FP);
+}
+
+// A missed shot: the hook flies out to the end of the ray and reels back.
+// The climber stays on their ledge, so the world goes on around them.
+static void hook_miss_step(void) {
+  s_hook_len += HOOK_SPEED;
+  if (s_hook_len >= 2 * s_hook_dist) s_rope_phase = ROPE_IDLE;
 }
 
 // One tick of a rescue in progress. Gravity is off while the hook flies and
@@ -571,13 +732,13 @@ static void rope_step(void) {
     if (s_hook_len >= s_hook_dist) s_rope_phase = ROPE_CLIMB;
     return;
   }
-  int32_t feet_y = s_climber_y_fp >> FP;
-  int32_t left = feet_y - l->y;
+  // Feet head for the anchor in a straight line along the rope.
+  int32_t dx = s_rope_ax - (s_climber_x_fp >> FP);
+  int32_t dy = l->y - (s_climber_y_fp >> FP);
+  int32_t left = cheb_dist(dx, dy);
   if (left > ROPE_CLIMB_SPEED) {
-    // Close in on the anchor sideways in step with the climb.
-    int32_t cx = s_climber_x_fp >> FP;
-    s_climber_x_fp += ((int32_t)(s_rope_ax - cx) * ROPE_CLIMB_SPEED << FP) / left;
-    s_climber_y_fp -= (int32_t)ROPE_CLIMB_SPEED << FP;
+    s_climber_x_fp += (dx * ROPE_CLIMB_SPEED << FP) / left;
+    s_climber_y_fp += (dy * ROPE_CLIMB_SPEED << FP) / left;
     return;
   }
   s_rope_phase = ROPE_IDLE;
@@ -609,7 +770,9 @@ static void game_tick(void *data) {
   for (int i = 0; i < MAX_SPARKS; i++) if (s_sparks[i].ticks > 0) s_sparks[i].ticks--;
   int16_t prev_feet_y = s_climber_y_fp >> FP;
 
-  if (s_rope_phase != ROPE_IDLE) {
+  aim_tick();
+  if (s_rope_phase == ROPE_MISS) hook_miss_step();
+  if (s_rope_phase == ROPE_SHOOT || s_rope_phase == ROPE_CLIMB) {
     rope_step();
   } else if (s_airborne) {
     s_vy_fp += GRAVITY_FP;
@@ -745,7 +908,8 @@ static void game_tick(void *data) {
     r->y_fp += ROCK_SPEED_FP;
     int32_t ry = r->y_fp >> FP;
     if (ry - s_cam_y > s_bounds.size.h + 20) { r->active = false; continue; }
-    if (s_invuln_ticks == 0 && !safe_on_top && s_rope_phase == ROPE_IDLE) {
+    if (s_invuln_ticks == 0 && !safe_on_top &&
+        s_rope_phase != ROPE_SHOOT && s_rope_phase != ROPE_CLIMB) {
       int32_t rx = r->x_fp >> FP;
       int32_t dx = rx - (s_climber_x_fp >> FP);
       int32_t dy = ry - (s_climber_y_fp >> FP);
@@ -841,8 +1005,34 @@ static bool on_summit(void) {
          s_ledges[s_standing_ledge_idx].type == LEDGE_SUMMIT;
 }
 
+// Aim line: dots out along the ray, ending in a crosshair that turns
+// yellow and pulses when it's on a ledge the hook can catch.
+static void draw_aim(GContext *ctx, int16_t cx, int16_t feet_y) {
+  int16_t x, y;
+  bool hit = aim_trace(&x, &y) >= 0;
+  int16_t ox = cx, oy = (int16_t)(feet_y - 20);
+  int16_t ex = x, ey = (int16_t)(y - s_cam_y);
+  int16_t n = cheb_dist(ex - ox, ey - oy);
+  for (int16_t t = 8; t < n - 4; t += 6) {
+    int16_t px = (int16_t)(ox + (ex - ox) * t / n), py = (int16_t)(oy + (ey - oy) * t / n);
+    fill(ctx, GColorBlack, (int16_t)(px - 1), (int16_t)(py - 1), 3, 3);
+    fill(ctx, GColorWhite, px, py, 1, 1);
+  }
+  GColor c = hit ? ((s_anim / 4) % 2 ? GColorYellow : GColorChromeYellow) : GColorLightGray;
+  int16_t r = hit ? 5 : 3;
+  fill(ctx, GColorBlack, (int16_t)(ex - r - 1), (int16_t)(ey - 1), (int16_t)(2 * r + 3), 3);
+  fill(ctx, GColorBlack, (int16_t)(ex - 1), (int16_t)(ey - r - 1), 3, (int16_t)(2 * r + 3));
+  fill(ctx, c, (int16_t)(ex - r), ey, (int16_t)(2 * r + 1), 1);
+  fill(ctx, c, ex, (int16_t)(ey - r), 1, (int16_t)(2 * r + 1));
+
+  fill(ctx, GColorBlack, 0, 18, s_bounds.size.w, 15);
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, S(S_AIM_HINT), s_f14, GRect(0, 15, s_bounds.size.w, 16),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
+}
+
 static const Sprite *climber_pose(void) {
-  if (s_rope_phase != ROPE_IDLE) return &SPR_CLIMB;
+  if (s_rope_phase == ROPE_SHOOT || s_rope_phase == ROPE_CLIMB) return &SPR_CLIMB;
   if (s_airborne) {
     return (s_tumbling || s_vy_fp > FALL_POSE_VY_FP) ? &SPR_FALL : &SPR_JUMP;
   }
@@ -1159,16 +1349,22 @@ static void draw_game(GContext *ctx, GRect b) {
   int16_t feet_y = (int16_t)((s_climber_y_fp >> FP) - s_cam_y);
   const Sprite *pose = climber_pose();
   int8_t facing = s_facing;
+  if (s_aiming) draw_aim(ctx, cx, feet_y);
   if (s_rope_phase != ROPE_IDLE) {
     // Rope from the anchor (or the flying hook) down to the climber's
     // gloves; while climbing, the pose mirrors to alternate hand over hand.
-    int16_t hx = cx, hy = (int16_t)(feet_y - pose->h + 2);
+    int16_t hx = cx, hy = (int16_t)(feet_y - SPR_CLIMB.h + 2);
     int16_t ax = s_rope_ax, ay = (int16_t)(s_rope_ay - s_cam_y - 1);
-    if (s_rope_phase == ROPE_SHOOT && s_hook_len < s_hook_dist) {
-      ax = (int16_t)(hx + (ax - hx) * s_hook_len / s_hook_dist);
-      ay = (int16_t)(hy + (ay - hy) * s_hook_len / s_hook_dist);
+    int16_t out = -1;  // hook still in flight: how far along
+    if (s_rope_phase == ROPE_SHOOT && s_hook_len < s_hook_dist) out = s_hook_len;
+    if (s_rope_phase == ROPE_MISS) {
+      out = s_hook_len < s_hook_dist ? s_hook_len : (int16_t)(2 * s_hook_dist - s_hook_len);
     }
-    if (hy > ay) {
+    if (out >= 0) {
+      ax = (int16_t)(hx + (ax - hx) * out / s_hook_dist);
+      ay = (int16_t)(hy + (ay - hy) * out / s_hook_dist);
+    }
+    if (abs(hx - ax) + abs(hy - ay) > 3) {
       graphics_context_set_stroke_color(ctx, GColorBlack);
       graphics_context_set_stroke_width(ctx, 3);
       graphics_draw_line(ctx, GPoint(hx, hy), GPoint(ax, ay));
@@ -1434,7 +1630,7 @@ static bool end_screen_unlocked(void) {
 static void up_click(ClickRecognizerRef rec, void *ctx) {
   switch (s_state) {
     case ST_TITLE: start_run(); break;
-    case ST_PLAYING: try_jump(-1); break;
+    case ST_PLAYING: stop_aim(); try_jump(-1); break;
     case ST_SHOP:
       if (s_shop_sel > 0) {
         s_shop_sel--;
@@ -1448,7 +1644,7 @@ static void up_click(ClickRecognizerRef rec, void *ctx) {
 static void down_click(ClickRecognizerRef rec, void *ctx) {
   switch (s_state) {
     case ST_TITLE: open_shop(); break;
-    case ST_PLAYING: try_jump(1); break;
+    case ST_PLAYING: stop_aim(); try_jump(1); break;
     case ST_SHOP:
       if (s_shop_sel < 2) {
         s_shop_sel++;
@@ -1464,7 +1660,11 @@ static void down_click(ClickRecognizerRef rec, void *ctx) {
 static void select_click(ClickRecognizerRef rec, void *ctx) {
   switch (s_state) {
     case ST_TITLE: start_run(); break;
-    case ST_PLAYING: try_rope(); break;
+    case ST_PLAYING:
+      if (s_aiming) fire_aimed_rope();
+      else if (s_airborne) try_rope();
+      else start_aim();
+      break;
     case ST_PAUSED:
       s_state = ST_PLAYING;
       stop_timer();
@@ -1481,6 +1681,11 @@ static void select_click(ClickRecognizerRef rec, void *ctx) {
 static void back_click(ClickRecognizerRef rec, void *ctx) {
   switch (s_state) {
     case ST_PLAYING:
+      if (s_aiming) {  // BACK just lowers the hook
+        stop_aim();
+        layer_mark_dirty(s_layer);
+        break;
+      }
       s_state = ST_PAUSED;
       stop_timer();
       layer_mark_dirty(s_layer);
@@ -1530,6 +1735,7 @@ static void window_load(Window *window) {
 }
 
 static void window_unload(Window *window) {
+  stop_aim();
   layer_destroy(s_layer);
 }
 
