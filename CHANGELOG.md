@@ -27,7 +27,7 @@
   background: a pine valley and snowy ranges that sink away below, drifting
   clouds, and a sky that runs from day through sunset to a starry night with
   an aurora near the summit.
-- **Chip sounds.** Jumps, landings, gems, the hook's throw and clank, rocks,
+- **Chip sounds.** Gems, the hook's throw and clank, rocks,
   crackling ledges, a mist warning and jingles for a record and the summit,
   on the Time 2 speaker. Sound level Off/Soft/Normal/Loud on the pause
   screen (DOWN); Quiet Time and the watch's mute always win.

@@ -539,10 +539,8 @@ static void recycle_offscreen_ledges(void) {
 #define REST(ms) {0, SI, ms, 0, 0}
 #define TRACK(notes) { notes, SFX_N(notes), NULL }
 
-// Jump: a quick rising blip.
-static const SpeakerNote SND_JUMP[] = {{72, SQ, 25, 70, 0}, {79, SQ, 35, 60, 0}};
-// Landing: a soft tick.
-static const SpeakerNote SND_LAND[] = {{69, TR_, 30, 60, 0}};
+// Jumps and landings are silent on purpose: they happen every second, and
+// a sound for each was too much.
 // Gem: the classic two-note coin.
 static const SpeakerNote SND_GEM[] = {{83, SQ, 45, 90, 0}, {88, SQ, 90, 90, 0}, {88, SQ, 120, 35, 0}};
 // Rope coil: a rising arpeggio.
@@ -617,8 +615,6 @@ static void sfx_tracks(const SpeakerTrack *t, uint32_t c) {
 }
 
 #define SFX(name, notes) static void name(void) { sfx_play(notes, SFX_N(notes)); }
-SFX(sfx_jump, SND_JUMP)
-SFX(sfx_land, SND_LAND)
 SFX(sfx_gem, SND_GEM)
 SFX(sfx_coil, SND_COIL)
 SFX(sfx_throw, SND_THROW)
@@ -772,7 +768,6 @@ static void try_jump(int8_t dir) {
   s_ignore_ledge_idx = -1;
   s_vx_fp = (int32_t)dir * JUMP_VX_FP;
   s_vy_fp = JUMP_VY0_FP;
-  sfx_jump();
   layer_mark_dirty(s_layer);
 }
 
@@ -1011,7 +1006,6 @@ static void rope_step(void) {
   if (l->type == LEDGE_ICE) s_ice_dir = s_facing;
   else if (l->type == LEDGE_CRUMBLE && l->crumble_ticks < 0) l->crumble_ticks = crumble_ticks();
   if (l->type == LEDGE_CRUMBLE) sfx_crack();
-  else sfx_land();
 }
 
 static void game_tick(void *data) {
@@ -1078,7 +1072,6 @@ static void game_tick(void *data) {
             l->crumble_ticks = crumble_ticks();
           }
           if (l->type == LEDGE_CRUMBLE) sfx_crack();
-          else sfx_land();
           break;
         }
       }
