@@ -118,9 +118,11 @@ class Game:
         if self.rand(100) >= chance: return NORMAL
         return ICE if self.rand(2) else CRUMBLE
     def maybe_gem(self, cx, ly):
-        if self.rand(100) >= self.P["GEM_PCT"]: return
+        # Rope coils (main.c maybe_spawn_gem): 0.7% per ledge from 20 m, else a gem roll.
+        rope = self.height_of(ly) >= 20 and self.rand(1000) < 7
+        if not rope and self.rand(100) >= self.P["GEM_PCT"]: return
         if len(self.gems) < MAX_GEMS:
-            self.gems.append([cx, ly - 16])
+            self.gems.append([cx, ly - 16, rope])
             self.rand(4)   # colour (keeps rng stream shape)
     def gen_floor(self):
         P = self.P
@@ -320,7 +322,10 @@ class Game:
         for g in self.gems:
             if g[1] - self.cam_y > H + 60: continue
             dx = g[0] - cxp; dy = g[1] - body_y
-            if dx * dx + dy * dy < 121: self.gems_run += 1; continue
+            if dx * dx + dy * dy < 121:
+                if g[2]: self.rope_left = min(9, self.rope_left + 1)
+                else: self.gems_run += 1
+                continue
             keepg.append(g)
         self.gems = keepg
         # mist

@@ -32,9 +32,12 @@ Drie upgrades, elk 5 niveaus, kosten 15/40/90/160/250 edelstenen:
 - **Klimtouw:** een enterhaak, één keer per run per niveau.
   - SELECT in de lucht: de haak grijpt een richel midden op het scherm en
     je klimt langs het touw omhoog.
-  - SELECT op een richel: richten door het horloge te kantelen, SELECT
-    schiet, TERUG annuleert. Zo haal je edelsteenrichels die te ver weg
-    hangen om te springen. Mis je, dan ben je het touw kwijt.
+  - SELECT op een richel: richten, SELECT schiet, TERUG annuleert. Twee
+    richtstijlen, te wisselen met OMHOOG in het pauzescherm: een slingerend
+    vizier (timing) of kantelen. Zo haal je edelsteenrichels die te ver weg
+    hangen om te springen; ze dragen 2 edelstenen en een touwrol, zodat je
+    er altijd weer af kunt haken. Mis je, dan ben je het touw kwijt.
+  - Losse touwrollen (zeldzaam) geven +1 touw, tot 9 tegelijk.
 
 ## Talen
 

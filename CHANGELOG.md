@@ -13,8 +13,12 @@
 - **Grappling hook.** With rope left, SELECT mid-air fires the hook at a
   ledge near the middle of the screen and the climber climbs up hand over
   hand. SELECT on a ledge raises the hook instead: tilt the watch to aim,
-  SELECT fires, BACK lowers it. Every so often a gem ledge hangs out of jump
-  reach, only for climbers with rope left. A missed shot costs the rope.
+  SELECT fires, BACK lowers it. Two aiming styles, switched with UP on the
+  pause screen: a swinging aim line (timing) or tilting the watch. Every so
+  often a gem ledge hangs out of jump reach, only for climbers with rope
+  left; it holds two gems and a rope coil, so there's always a rope to get
+  back off it. Rare rope coils also turn up on ordinary ledges (up to 9
+  ropes carried). A missed shot costs the rope.
 - **The summit.** At 1000 m the mountain ends in a flag. Reach it with full
   gear, walk over and grab it; the flag then stands beside your climber on
   the title screen.

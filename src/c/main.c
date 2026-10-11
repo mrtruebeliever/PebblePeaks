@@ -70,6 +70,7 @@ typedef struct {
   int16_t x, y;   // world coords, whole px
   uint8_t color_idx;
   bool active;
+  bool rope;      // a rope coil (+1 rope this run) instead of a gem
 } Gem;
 static Gem s_gems[MAX_GEMS];
 static int32_t s_gems_run;    // collected this run
@@ -100,6 +101,7 @@ static int16_t s_flag_x, s_flag_y; // world coords of the pole's foot
 #define PK_JACKET 4
 #define PK_ROPE 5
 #define PK_FOUND 6
+#define PK_AIM 7
 
 #define MAX_LEVEL 5
 static const int32_t SHOP_COST[MAX_LEVEL] = {15, 40, 90, 160, 250};
@@ -123,14 +125,29 @@ static int16_t s_hook_len, s_hook_dist; // hook flight so far / in total (px)
 
 // Aimed shots: SELECT while standing raises the hook, tilting the watch
 // swings the aim, SELECT fires. s_aim_angle is a Pebble trig angle off
-// straight up, negative to the left.
+// straight up, negative to the left. Two ways to aim, picked on the pause
+// screen: the line swings by itself and SELECT is all timing, or tilting
+// the watch steers it.
+typedef enum { AIM_SWING, AIM_TILT } AimMode;
+static uint8_t s_aim_mode = AIM_SWING;
 static bool s_aiming;
+static bool s_accel_on;
 static int32_t s_aim_angle;
-#define AIM_MAX_ANGLE (TRIG_MAX_ANGLE * 70 / 360)
-#define AIM_FULL_TILT 700             // milli-g of sideways tilt for full aim
+static int32_t s_aim_phase;
+#define AIM_MAX_ANGLE (TRIG_MAX_ANGLE * 80 / 360)
+#define AIM_FULL_TILT 450             // milli-g of sideways tilt (~27 deg) for full aim
+#define AIM_SWING_TICKS 60            // one swing there and back: 2 s
+
+// Ropes: the shop level sets how many a run starts with; coils found on
+// the way add more, up to ROPE_CARRY_MAX.
+#define ROPE_CARRY_MAX 9
+#define COIL_MIN_M 20
+#define COIL_PERMILLE 7               // chance per ledge, in 1/1000 (see tools/TUNING.md)
+static int8_t s_rope_flash;           // HUD rope counter glows when it changes
 
 // Gem ledges: while there's rope left, now and then a ledge hangs out of
-// jump reach off to the side, carrying a row of gems — worth a shot.
+// jump reach off to the side, carrying two gems and a rope coil — worth a
+// shot, and the coil means there's always a rope to get back off it.
 #define GEM_LEDGE_MIN_M 30
 #define GEM_LEDGE_CHANCE 15           // % per floor
 #define GEM_LEDGE_W 36
@@ -188,6 +205,7 @@ enum {
   S_SHOP_TITLE, S_ITEM_GRIP, S_ITEM_JACKET, S_ITEM_ROPE,
   S_DESC_GRIP, S_DESC_JACKET, S_DESC_ROPE, S_SHOP_HINT, S_SUMMIT_NEAR, S_MAX,
   S_PAUSED, S_HINT_RESUME, S_HINT_QUIT, S_AIM_HINT,
+  S_AIM_HINT_SWING, S_AIM_MODE, S_AIM_TILT, S_AIM_SWING,
   NUM_STRS
 };
 
@@ -201,6 +219,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "SELECT · buy    BACK · close", "The summit is within reach...", "MAX",
     "Paused", "SELECT · resume", "BACK · quit",
     "Tilt to aim · SELECT fires",
+    "Wait for it · SELECT fires", "UP · aim: %s", "tilt", "swing",
   },
   [L_NL] = {
     "SELECT · klimmen", "OMLAAG · winkel", "Record: %ldm",
@@ -211,6 +230,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "SELECT · kopen    TERUG · sluiten", "De top ligt binnen bereik...", "MAX",
     "Pauze", "SELECT · verder", "TERUG · stoppen",
     "Kantel om te richten · SELECT",
+    "Wacht op het moment · SELECT", "OMHOOG · richten: %s", "kantelen", "slinger",
   },
   [L_FR] = {
     "SELECT · grimper", "BAS · boutique", "Record : %ldm",
@@ -221,6 +241,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "SELECT · acheter   RETOUR · fermer", "Le sommet est à portée...", "MAX",
     "Pause", "SELECT · reprendre", "RETOUR · quitter",
     "Inclinez pour viser · SELECT",
+    "Au bon moment · SELECT", "HAUT · visée : %s", "inclinaison", "balancier",
   },
   [L_DE] = {
     "SELECT · klettern", "RUNTER · Laden", "Rekord: %ldm",
@@ -231,6 +252,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "SELECT · kaufen  ZURÜCK · schließen", "Der Gipfel ist in Reichweite...", "MAX",
     "Pausiert", "SELECT · weiter", "ZURÜCK · beenden",
     "Kippen zum Zielen · SELECT",
+    "Im richtigen Moment · SELECT", "RAUF · Zielen: %s", "Kippen", "Pendel",
   },
   [L_ES] = {
     "SELECT · escalar", "ABAJO · tienda", "Récord: %ldm",
@@ -241,6 +263,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "SELECT · comprar   ATRÁS · cerrar", "La cima está a tu alcance...", "MÁX",
     "Pausa", "SELECT · seguir", "ATRÁS · salir",
     "Inclina para apuntar · SELECT",
+    "En el momento justo · SELECT", "ARRIBA · apuntar: %s", "inclinar", "péndulo",
   },
 };
 
@@ -302,6 +325,7 @@ static void save_progress(void) {
   persist_write_int(PK_JACKET, s_jacket);
   persist_write_int(PK_ROPE, s_rope);
   persist_write_bool(PK_FOUND, s_found);
+  persist_write_int(PK_AIM, s_aim_mode);
 }
 
 static void load_progress(void) {
@@ -311,6 +335,7 @@ static void load_progress(void) {
   s_jacket = (int8_t)persist_read_int(PK_JACKET);
   s_rope = (int8_t)persist_read_int(PK_ROPE);
   s_found = persist_read_bool(PK_FOUND);
+  if (persist_exists(PK_AIM)) s_aim_mode = (uint8_t)persist_read_int(PK_AIM);
 }
 
 // Grip soles: less ice slide (1.5 -> 0.4 px/tick) and crumble ledges hold
@@ -329,10 +354,11 @@ static uint8_t pick_ledge_type(int32_t world_y) {
   return (rand() % 2) ? LEDGE_ICE : LEDGE_CRUMBLE;
 }
 
-static void spawn_gem(int16_t cx, int16_t ledge_y) {
+static void spawn_pickup(int16_t cx, int16_t ledge_y, bool rope) {
   for (int i = 0; i < MAX_GEMS; i++) {
     if (!s_gems[i].active) {
       s_gems[i].active = true;
+      s_gems[i].rope = rope;
       s_gems[i].x = cx;
       s_gems[i].y = (int16_t)(ledge_y - 16);
       s_gems[i].color_idx = (uint8_t)(rand() % 4);
@@ -342,7 +368,11 @@ static void spawn_gem(int16_t cx, int16_t ledge_y) {
 }
 
 static void maybe_spawn_gem(int16_t cx, int16_t ledge_y) {
-  if (rand() % 100 < 40) spawn_gem(cx, ledge_y);
+  if (height_from_world_y(ledge_y) >= COIL_MIN_M && rand() % 1000 < COIL_PERMILLE) {
+    spawn_pickup(cx, ledge_y, true);
+  } else if (rand() % 100 < 40) {
+    spawn_pickup(cx, ledge_y, false);
+  }
 }
 
 // A gem ledge goes on the far side of the screen, GEM_LEDGE_RISE above the
@@ -366,7 +396,9 @@ static void maybe_place_gem_ledge(int32_t center, int16_t half_w, int32_t floor_
   slot->crumble_ticks = -1;
   // Bunched up: a shot at a ledge this narrow lands mid-ledge (see
   // fire_aimed_rope), within pickup range of all three.
-  for (int k = -1; k <= 1; k++) spawn_gem((int16_t)(cb + k * 6), slot->y);
+  spawn_pickup((int16_t)(cb - 9), slot->y, false);
+  spawn_pickup((int16_t)cb, slot->y, true);
+  spawn_pickup((int16_t)(cb + 9), slot->y, false);
 }
 
 // Generates the next floor above s_gen_top_y. The center is always within
@@ -468,6 +500,7 @@ static void start_run(void) {
   s_rope_left = s_rope;
   s_rope_phase = ROPE_IDLE;
   s_aiming = false;
+  s_rope_flash = 0;
   s_gem_flash = 0;
   for (int i = 0; i < MAX_SPARKS; i++) s_sparks[i].ticks = 0;
   s_tumbling = false;
@@ -498,14 +531,16 @@ static void start_run(void) {
   layer_mark_dirty(s_layer);
 }
 
-// Banks the run's gems and height record. Every way out of a run goes
-// through here, so quitting from the pause screen keeps the gems too.
 static void stop_aim(void) {
-  if (!s_aiming) return;
   s_aiming = false;
-  accel_data_service_unsubscribe();
+  if (s_accel_on) {
+    accel_data_service_unsubscribe();
+    s_accel_on = false;
+  }
 }
 
+// Banks the run's gems and height record. Every way out of a run goes
+// through here, so quitting from the pause screen keeps the gems too.
 static void finish_run(void) {
   stop_aim();
   s_gems_total += s_gems_run;
@@ -581,11 +616,16 @@ static int16_t hand_y(void) {
   return (int16_t)((s_climber_y_fp >> FP) - SPR_CLIMB.h + 2);
 }
 
+static void spend_rope(void) {
+  s_rope_left--;
+  s_rope_flash = 12;
+}
+
 // Sends the hook flying at ledge idx, caught on its lip near x; the climber
 // hangs off the rope from here on. Spends one rope.
 static void begin_rope(int idx, int16_t x) {
   const Ledge *l = &s_ledges[idx];
-  s_rope_left--;
+  spend_rope();
   s_rope_phase = ROPE_SHOOT;
   s_rope_ledge = (int16_t)idx;
   s_rope_ledge_y = l->y;
@@ -615,7 +655,11 @@ static void start_aim(void) {
   if (!can_aim() || s_aiming) return;
   s_aiming = true;
   s_aim_angle = 0;
-  accel_data_service_subscribe(0, NULL);  // just for accel_service_peek
+  s_aim_phase = 0;
+  if (s_aim_mode == AIM_TILT) {
+    accel_data_service_subscribe(0, NULL);  // just for accel_service_peek
+    s_accel_on = true;
+  }
   layer_mark_dirty(s_layer);
 }
 
@@ -658,7 +702,7 @@ static void fire_aimed_rope(void) {
     begin_rope(idx, x);
     return;
   }
-  s_rope_left--;
+  spend_rope();
   s_rope_phase = ROPE_MISS;
   s_rope_ax = x;
   s_rope_ay = (int16_t)(y + 1);  // drawn 1 px up, like a hook on a lip
@@ -672,6 +716,11 @@ static void aim_tick(void) {
   if (!s_aiming) return;
   if (!can_aim()) {  // knocked off, slid off the ice...
     stop_aim();
+    return;
+  }
+  if (s_aim_mode == AIM_SWING) {
+    s_aim_phase += TRIG_MAX_ANGLE / AIM_SWING_TICKS;
+    s_aim_angle = AIM_MAX_ANGLE * sin_lookup(s_aim_phase) / TRIG_MAX_RATIO;
     return;
   }
   AccelData a;
@@ -767,6 +816,7 @@ static void game_tick(void *data) {
   s_timer = app_timer_register(TICK_MS, game_tick, NULL);
   if (s_land_ticks > 0) s_land_ticks--;
   if (s_gem_flash > 0) s_gem_flash--;
+  if (s_rope_flash > 0) s_rope_flash--;
   for (int i = 0; i < MAX_SPARKS; i++) if (s_sparks[i].ticks > 0) s_sparks[i].ticks--;
   int16_t prev_feet_y = s_climber_y_fp >> FP;
 
@@ -934,8 +984,13 @@ static void game_tick(void *data) {
     int32_t dy = g->y - body_y;
     if (dx * dx + dy * dy < 121) {
       g->active = false;
-      s_gems_run++;
-      s_gem_flash = 8;
+      if (g->rope) {
+        if (s_rope_left < ROPE_CARRY_MAX) s_rope_left++;
+        s_rope_flash = 12;
+      } else {
+        s_gems_run++;
+        s_gem_flash = 8;
+      }
       // Reuse the oldest sparkle slot if all are busy.
       int slot = 0;
       for (int k = 0; k < MAX_SPARKS; k++) {
@@ -1027,7 +1082,7 @@ static void draw_aim(GContext *ctx, int16_t cx, int16_t feet_y) {
 
   fill(ctx, GColorBlack, 0, 18, s_bounds.size.w, 15);
   graphics_context_set_text_color(ctx, GColorWhite);
-  graphics_draw_text(ctx, S(S_AIM_HINT), s_f14, GRect(0, 15, s_bounds.size.w, 16),
+  graphics_draw_text(ctx, S(s_aim_mode == AIM_TILT ? S_AIM_HINT : S_AIM_HINT_SWING), s_f14, GRect(0, 15, s_bounds.size.w, 16),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 
@@ -1217,6 +1272,10 @@ static void draw_gems(GContext *ctx, GRect b) {
     int16_t sy = (int16_t)(g->y - s_cam_y);
     if (sy < -6 || sy > b.size.h + 6) continue;
     int16_t sx = g->x;
+    if (g->rope) {
+      draw_sprite(ctx, &SPR_ICON_ROPE_S, (int16_t)(sx - 4), (int16_t)(sy - 5), false, 1);
+      continue;
+    }
     draw_sprite(ctx, GEM_SPRITES[g->color_idx % 4], (int16_t)(sx - 4), (int16_t)(sy - 5), false, 1);
     if ((s_anim + i * 11) % 45 < 4) {
       draw_sprite(ctx, &SPR_GEM_SPARKLE, (int16_t)(sx), (int16_t)(sy - 7), false, 1);
@@ -1305,10 +1364,12 @@ static void draw_hud(GContext *ctx, GRect b) {
   graphics_draw_text(ctx, buf, s_f14, GRect(4, 1, 40, 16),
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 
-  // Rope rescues left: a little coil and a count (greyed out when used up).
-  if (s_rope > 0) {
+  // Ropes left: a little coil and a count (greyed out when used up,
+  // glowing for a moment whenever it changes).
+  if (s_rope > 0 || s_rope_left > 0) {
     draw_sprite(ctx, &SPR_ICON_ROPE_S, 44, 5, false, 1);
-    graphics_context_set_text_color(ctx, s_rope_left > 0 ? GColorWhite : GColorDarkGray);
+    graphics_context_set_text_color(ctx, s_rope_flash > 0 ? GColorChromeYellow :
+                                    s_rope_left > 0 ? GColorWhite : GColorDarkGray);
     snprintf(buf, sizeof(buf), "%d", s_rope_left);
     graphics_draw_text(ctx, buf, s_f14, GRect(56, 1, 14, 16),
                        GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
@@ -1557,10 +1618,16 @@ static void layer_update(Layer *layer, GContext *ctx) {
       break;
     case ST_PAUSED:
       draw_game(ctx, b);
-      fill(ctx, GColorBlack, 0, b.size.h / 2 - 30, b.size.w, 64);
+      fill(ctx, GColorBlack, 0, b.size.h / 2 - 30, b.size.w, 80);
       draw_center_text(ctx, S(S_PAUSED), s_f28b, b.size.h / 2 - 28, 30, b, GColorWhite);
       draw_center_text(ctx, S(S_HINT_RESUME), s_f14, b.size.h / 2 + 2, 18, b, GColorWhite);
       draw_center_text(ctx, S(S_HINT_QUIT), s_f14, b.size.h / 2 + 16, 18, b, GColorLightGray);
+      {
+        char buf[48];
+        snprintf(buf, sizeof(buf), S(S_AIM_MODE),
+                 S(s_aim_mode == AIM_TILT ? S_AIM_TILT : S_AIM_SWING));
+        draw_center_text(ctx, buf, s_f14, b.size.h / 2 + 30, 18, b, GColorChromeYellow);
+      }
       break;
     case ST_GAMEOVER:
       draw_gameover(ctx, b);
@@ -1631,6 +1698,11 @@ static void up_click(ClickRecognizerRef rec, void *ctx) {
   switch (s_state) {
     case ST_TITLE: start_run(); break;
     case ST_PLAYING: stop_aim(); try_jump(-1); break;
+    case ST_PAUSED:  // switch aiming style
+      s_aim_mode = s_aim_mode == AIM_TILT ? AIM_SWING : AIM_TILT;
+      persist_write_int(PK_AIM, s_aim_mode);
+      layer_mark_dirty(s_layer);
+      break;
     case ST_SHOP:
       if (s_shop_sel > 0) {
         s_shop_sel--;

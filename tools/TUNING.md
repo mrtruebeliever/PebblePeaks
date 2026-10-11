@@ -169,3 +169,10 @@ Met de betere runs (meer verdiepingen) blijft het grind-doel ~35 runs voor decen
 * De bot kijkt perfect vooruit en weet nooit "geen richel erboven"; menselijke spelers zullen lager scoren.
   Gebruik de verhoudingen (touw +70%, alles 5 ≈ 2x geen) meer dan de absolute meters.
 * Stenen: zonder tuning 14 treffers/run bij alles 5; rotskans verlagen (`ROCK_CAP` 3) veranderde weinig.
+
+## Touwrollen en edelsteenrichels (oktober 2026)
+* Losse touwrollen: 0,7% per richel vanaf 20 m (`COIL_PERMILLE 7`), max 9 touwen bij je. 2% bleek te
+  royaal: geen uitrusting 218 -> 291 m, alles 5 top 30% -> 53%. Met 0,7% (120 seeds, decent):
+  geen uitrusting 238 m eerste run, touw 5 ~422 m, alles 5 mediaan 890 m en top 37,5%; ~35 runs om alles te kopen.
+* Edelsteenrichels (2 edelstenen + 1 touwrol, alleen met touw over) zitten niet in de sim: de bot richt niet.
+  Ze kosten netto geen touw bij een treffer, alleen tijd tegenover de mist.
