@@ -132,15 +132,15 @@ static int16_t s_rope_ax, s_rope_ay;  // anchor on that ledge's lip, world coord
 static int16_t s_hook_len, s_hook_dist; // hook flight so far / in total (px)
 #define HOOK_SPEED 18                 // px per tick the hook flies
 #define ROPE_CLIMB_SPEED 3            // px per tick hauling up the rope
-#define ROPE_STROKE 16                // px climbed per hand-over-hand pull
-static int16_t s_rope_climbed;        // px climbed so far: drives the arms
+#define ROPE_STROKE 15                // px climbed per pull (hand and foot swap)
+static int16_t s_rope_climbed;        // px climbed so far: drives the animation
 static bool s_rope_mantle;            // gloves on the lip, pulling up onto it
 // An aimed shot ties the rope's lower end to the ledge it was fired from;
 // a mid-air rescue leaves it dangling.
 static bool s_rope_tied;
 static int16_t s_rope_bx, s_rope_by;  // where it's tied, world coords
-// While climbing, the climber hangs this far (feet) below their gloves.
-#define ROPE_HANG (SPR_CLIMB.h + 2)
+// While climbing, the climber hangs this far (feet) below their top glove.
+#define ROPE_HANG (SPR_CLIMB.h - 1)
 // Aimed shots pass through ledges less than this far above the feet: they
 // are a jump away anyway, and right overhead they'd block most of the arc.
 #define AIM_IGNORE_ABOVE 50
@@ -1120,62 +1120,15 @@ static GPoint rope_dir(int16_t hx, int16_t hy, int16_t ax, int16_t ay) {
   return GPoint((int16_t)(dx * 256 / len), (int16_t)(dy * 256 / len));
 }
 
-static void draw_rope_line(GContext *ctx, int16_t x0, int16_t y0, int16_t x1, int16_t y1) {
+// A rope through n points: all the black outline first, then the yellow
+// core, so a bend doesn't get a black notch where two segments meet.
+static void draw_rope_path(GContext *ctx, const GPoint *pts, int n) {
   graphics_context_set_stroke_color(ctx, GColorBlack);
   graphics_context_set_stroke_width(ctx, 3);
-  graphics_draw_line(ctx, GPoint(x0, y0), GPoint(x1, y1));
+  for (int i = 1; i < n; i++) graphics_draw_line(ctx, pts[i - 1], pts[i]);
   graphics_context_set_stroke_color(ctx, GColorChromeYellow);
   graphics_context_set_stroke_width(ctx, 1);
-  graphics_draw_line(ctx, GPoint(x0, y0), GPoint(x1, y1));
-}
-
-// One arm, shoulder -> elbow -> glove, as a red sleeve with a black outline.
-static void draw_arm(GContext *ctx, GPoint sh, GPoint el, GPoint gl) {
-  graphics_context_set_stroke_color(ctx, GColorBlack);
-  graphics_context_set_stroke_width(ctx, 5);
-  graphics_draw_line(ctx, sh, el);
-  graphics_draw_line(ctx, el, gl);
-  graphics_context_set_stroke_color(ctx, GColorRed);
-  graphics_context_set_stroke_width(ctx, 3);
-  graphics_draw_line(ctx, sh, el);
-  graphics_draw_line(ctx, el, gl);
-  fill(ctx, GColorBlack, (int16_t)(gl.x - 3), (int16_t)(gl.y - 3), 7, 7);
-  fill(ctx, GColorWhite, (int16_t)(gl.x - 2), (int16_t)(gl.y - 2), 5, 5);
-}
-
-// Hand over hand: the gloves sit on the rope just above the head. The
-// gripping one stays put while the body rises past it (so it slides down
-// relative to the body), the other reaches up above it; every ROPE_STROKE
-// px they swap. Neither goes past the anchor, and while mantling both hold
-// the lip. While the hook is still flying both hold on, one above the other.
-static void draw_rope_arms(GContext *ctx, int16_t cx, int16_t feet_y) {
-  int16_t ax = s_rope_ax, ay = (int16_t)(s_rope_ay - s_cam_y - 1);
-  int16_t gy = (int16_t)(feet_y - ROPE_HANG);
-  GPoint u = rope_dir(cx, gy, ax, ay);
-  int16_t room = (int16_t)isqrt((ax - cx) * (ax - cx) + (ay - gy) * (ay - gy));
-  int16_t reach[2] = { 10, 2 };  // along the rope from the gloves' base point
-  if (s_rope_phase == ROPE_CLIMB) {
-    for (int k = 0; k < 2; k++) {
-      int16_t p = (int16_t)((s_rope_climbed + k * ROPE_STROKE) % (2 * ROPE_STROKE));
-      reach[k] = p < ROPE_STROKE ? (int16_t)(ROPE_STROKE - p)  // gripping
-                                 : (int16_t)(p - ROPE_STROKE); // reaching up
-    }
-  }
-  int16_t top = (int16_t)(feet_y - SPR_CLIMB.h);
-  for (int k = 0; k < 2; k++) {
-    int16_t side = k == 0 ? -1 : 1;
-    GPoint gl;
-    if (s_rope_mantle) {
-      gl = GPoint((int16_t)(ax + side * 4), ay);
-    } else if (s_rope_phase == ROPE_CLIMB && reach[k] >= room) {
-      gl = GPoint(ax, ay);
-    } else {
-      gl = GPoint((int16_t)(cx + u.x * reach[k] / 256), (int16_t)(gy + u.y * reach[k] / 256));
-    }
-    GPoint sh = GPoint((int16_t)(cx + side * 6), (int16_t)(top + 13));
-    GPoint el = GPoint((int16_t)(cx + side * 9), (int16_t)((sh.y + gl.y) / 2));
-    draw_arm(ctx, sh, el, gl);
-  }
+  for (int i = 1; i < n; i++) graphics_draw_line(ctx, pts[i - 1], pts[i]);
 }
 
 // Aim line: dots out along the ray, ending in a crosshair that turns
@@ -1546,39 +1499,42 @@ static void draw_game(GContext *ctx, GRect b) {
       ax = (int16_t)(hx + (ax - hx) * out / s_hook_dist);
       ay = (int16_t)(hy + (ay - hy) * out / s_hook_dist);
     }
-    int16_t tx = hx, ty = hy;  // tail end
+    // Up to three points, bottom to top: knot or loose tail, gloves, hook.
+    GPoint pts[3];
+    int n = 0;
     bool mantling = on_rope && s_rope_mantle;  // gloves on the lip
+    int16_t gx = cx, gy = (int16_t)(feet_y - ROPE_HANG);
+    if (!on_rope) gx = hx, gy = hy;
     if (on_rope && s_rope_tied) {
-      // Tied off below: taut from the knot up to the gloves, then on to the
+      // Tied off below: taut from the knot up through the gloves to the
       // hook (straight from knot to hook once the gloves are on the lip).
-      int16_t bx = s_rope_bx, by = (int16_t)(s_rope_by - s_cam_y);
-      int16_t gx = cx, gy = (int16_t)(feet_y - ROPE_HANG);
+      pts[n++] = GPoint(s_rope_bx, (int16_t)(s_rope_by - s_cam_y));
       if (s_rope_phase == ROPE_SHOOT) gx = hx, gy = hy;
-      if (mantling) gx = ax, gy = ay;
-      if (abs(bx - gx) + abs(by - gy) > 3) draw_rope_line(ctx, bx, by, gx, gy);
-      fill(ctx, GColorBlack, (int16_t)(bx - 2), (int16_t)(by - 3), 5, 4);   // the knot
-      fill(ctx, GColorChromeYellow, (int16_t)(bx - 1), (int16_t)(by - 2), 3, 2);
-      tx = gx;
-      ty = gy;
+      if (!mantling) pts[n++] = GPoint(gx, gy);
     } else if (on_rope && !mantling) {
       // The rope runs on down past the gloves, behind the hanging body.
-      int16_t gy = (int16_t)(feet_y - ROPE_HANG);
-      GPoint u = rope_dir(cx, gy, ax, ay);
-      tx = (int16_t)(cx - u.x * 34 / 256);
-      ty = (int16_t)(gy - u.y * 34 / 256);
+      GPoint u = rope_dir(gx, gy, ax, ay);
+      pts[n++] = GPoint((int16_t)(gx - u.x * 34 / 256), (int16_t)(gy - u.y * 34 / 256));
+      pts[n++] = GPoint(gx, gy);
+    } else if (!on_rope) {
+      pts[n++] = GPoint(gx, gy);  // a missed shot, from above the head
     }
-    if ((!mantling || s_rope_tied) && abs(tx - ax) + abs(ty - ay) > 3) {
-      draw_rope_line(ctx, tx, ty, ax, ay);
+    if (n > 0) {
+      pts[n++] = GPoint(ax, ay);
+      if (abs(pts[0].x - ax) + abs(pts[0].y - ay) > 3) draw_rope_path(ctx, pts, n);
+    }
+    if (on_rope && s_rope_tied) {
+      fill(ctx, GColorBlack, (int16_t)(pts[0].x - 2), (int16_t)(pts[0].y - 3), 5, 4);  // the knot
+      fill(ctx, GColorChromeYellow, (int16_t)(pts[0].x - 1), (int16_t)(pts[0].y - 2), 3, 2);
     }
     fill(ctx, GColorBlack, (int16_t)(ax - 3), (int16_t)(ay - 2), 7, 3);   // the hook
     fill(ctx, GColorLightGray, (int16_t)(ax - 2), (int16_t)(ay - 1), 5, 1);
-    // Mirror the body every stroke so the legs kick in turn.
+    // Mirror the climber every stroke: hands and feet take turns on the rope.
     if (s_rope_phase == ROPE_CLIMB && (s_rope_climbed / ROPE_STROKE) % 2) facing = (int8_t)-facing;
   }
   // Blink the climber while invulnerable, as damage feedback.
   if (s_invuln_ticks == 0 || (s_invuln_ticks / 3) % 2 == 0) {
     draw_standing(ctx, pose, cx, feet_y, facing, 1);
-    if (on_rope) draw_rope_arms(ctx, cx, feet_y);
   }
   draw_sparks(ctx, b);
 

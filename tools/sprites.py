@@ -139,36 +139,40 @@ FRAMES = {
     ],
 }
 
-# Hanging on the rope, seen from behind: beanie with pompom, backpack, legs
-# apart. Only the body: the game draws the arms and gloves on top, moving
-# hand over hand along the rope (draw_rope_arms in main.c). It's mirrored
-# every stroke so the legs alternate too.
+# Climbing the rope, seen from behind: one glove grips the rope above the
+# beanie, the other arm is bent with its hand on the rope in front of the
+# body (hidden), one knee is pulled up with the boot on the rope. The game
+# mirrors it every stroke, so hands and feet take turns.
 FRAMES["CLIMB"] = [
     "......KKKK......",
     ".....KWWWWK.....",
     ".....KWWWWK.....",
-    "....KKKKKKKK....",
-    "...KRRRRRRoRK...",
-    "...KRRRRRRRRK...",
-    "...KrRRRRRRRK...",
-    "...KWWWWWWWWK...",
-    "...KNNNNNNNNK...",
-    "..KSNNNNNNNNSK..",
-    "...KNNNNNNNNK...",
-    "...KKnNNNNnKK...",
-    "..KKRKKssKKRKK..",
-    ".KRRKPPPPPPKRRK.",
-    ".KrRKPppppPKRrK.",
-    ".KrRKPPPPPPKRrK.",
-    "..KrKPpPPpPKrK..",
-    "..KKKKKKKKKKKK..",
+    "....KRRKKKK.....",
+    "...KRrKKKKKKK...",
+    "..KRrKRRRRRRoK..",
+    ".KRrKRRRRRRRRK..",
+    "KRrKRRRRRRRRRK..",
+    "KRrKRRRRRRRRRK..",
+    "KRrKWWWWWWWWWK..",
+    "KRrKNNNNNNNNNKK.",
+    "KRrSNNNNNNNNNSRK",
+    "KRrKNNNNNNNNNKrK",
+    "KRrKKnNNNNnKKRrK",
+    ".KRRKKKssKKKRRK.",
+    ".KRrKPPPPPPKRrK.",
+    "..KrKPppppPKrK..",
+    "..KrKPPPPPPKKK..",
+    "..KKKPpPPpPKK...",
+    "...KKKKKKKKKK...",
     "....KrrrrrrK....",
-    "....KBBcBBBK....",
-    "...KBBKKKBBcK...",
-    "...KBbK..KBBK...",
-    "..KNNNK...KNNK..",
-    "..KnnK....KnnK..",
-    "...KK......KK...",
+    "....KBBcBBBBK...",
+    "....KBbKKBBBBK..",
+    "....KBbK.KKBBcK.",
+    "....KBbK..KBBK..",
+    "....KBBK.KBBK...",
+    "...KNNNK.KNNK...",
+    "...KnnnK.KnnK...",
+    "....KKK...KK....",
 ]
 
 # Summit flag: pole with a gold knob and a two-frame waving pennant.
