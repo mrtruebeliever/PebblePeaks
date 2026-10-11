@@ -139,6 +139,41 @@ FRAMES = {
     ],
 }
 
+# Climbing the rope, seen from behind: one glove high on the rope, the
+# other below it, backpack in view, one knee pulled up. The game mirrors it
+# every few ticks so hands and legs alternate as the climber hauls up.
+FRAMES["CLIMB"] = [
+    ".....KKKK.......",
+    "....KWWWWK......",
+    "....KWWWWK......",
+    "...KRKKKKKKK....",
+    "..KrRK.KWWWWK...",
+    "..KrRK.KWWWWK...",
+    ".KrRK..KKKKRK...",
+    ".KrRKKKKKKKRRK..",
+    ".KrRKRRRRRoKRrK.",
+    ".KrRKRRRRRRKRrK.",
+    ".KrRKRRRRRRKRrK.",
+    ".KrRKWWWWWWKRrK.",
+    ".KrRKNNNNNNKRrK.",
+    ".KrRSNNNNNNSRrK.",
+    ".KrRKNNNNNNKRrK.",
+    ".KrRKKnNNnKKRrK.",
+    ".KrRRKKssKKRRrK.",
+    ".KrRKPPPPPPKRrK.",
+    ".KrRKPppppPKRrK.",
+    ".KrRKPPPPPPKRrK.",
+    "..KrKPpPPpPKrK..",
+    "..KKKKKKKKKKKK..",
+    "....KrrrrrrK....",
+    "....KBBcBBBK....",
+    "...KBBKKKBBcK...",
+    "...KBbK..KBBK...",
+    "..KNNNK...KNNK..",
+    "..KnnK....KnnK..",
+    "...KK......KK...",
+]
+
 # Summit flag: pole with a gold knob and a two-frame waving pennant.
 FLAG = {
     "FLAG0": [

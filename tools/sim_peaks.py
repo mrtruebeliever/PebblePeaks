@@ -16,6 +16,9 @@ W, H = 200, 228
 FP = 8
 CLIMBER_R = 7
 LAND_TICKS = 4
+HOOK_SPEED = 18         # rope: px/tick the hook flies
+ROPE_CLIMB_SPEED = 6    # rope: px/tick hauling up
+CLIMB_H = 29            # SPR_CLIMB height
 GRAVITY_FP, JUMP_VX_FP, JUMP_VY0_FP = 200, 435, -2220
 REACH_FOR_GAP = [27, 27, 27, 25, 25, 25, 23, 23, 22, 22, 20]
 FLOOR_GAP_MIN, FLOOR_GAP_MAX = 34, 44
@@ -68,6 +71,7 @@ class Game:
         self.height = 0; self.best = 0
         self.gems_run = 0
         self.rock_cd = 0; self.invuln = 0
+        self.rope_phase = None
         self.summit_placed = False
         self.rope_left = rope * self.P["ROPE_PER_LVL"]
         self.last_idx = -1; self.last_y = 0
@@ -175,28 +179,49 @@ class Game:
         self.air = True; self.bounced = False; self.tumbling = True
         self.vx = vx; self.vy = 0; self.stand = -1
     def use_rope(self):
-        if self.state != "play" or not self.air or self.rope_left <= 0: return False
-        mist_y = min((self.mist >> FP) - 4, self.cam_y + H - 10)  # on-screen ledges only
-        idx = -1
-        if self.last_idx >= 0:
-            l = self.ledges[self.last_idx]
-            if l.w != 0 and l.type != GONE and l.y == self.last_y and l.y < mist_y: idx = self.last_idx
-        if idx < 0:
-            feet = self.cy >> FP
-            below = lowest = -1
-            for i, l in enumerate(self.ledges):
-                if l.w == 0 or l.type == GONE or l.y >= mist_y: continue
-                if l.y >= feet and (below < 0 or l.y < self.ledges[below].y): below = i
-                if lowest < 0 or l.y > self.ledges[lowest].y: lowest = i
-            idx = below if below >= 0 else lowest
+        # Hook flies to the on-screen ledge nearest mid-screen above the feet,
+        # then the climber hauls up (see try_rope / rope_step in main.c).
+        if self.state != "play" or not self.air or self.rope_left <= 0 or self.rope_phase: return False
+        feet = self.cy >> FP
+        top, bottom, mid = self.cam_y + 34, self.cam_y + H - 10, self.cam_y + H // 2
+        idx, best = -1, 0
+        for i, l in enumerate(self.ledges):
+            if l.w == 0 or l.type == GONE: continue
+            if l.y < top or l.y > bottom or l.y > feet - 8: continue
+            d = abs(l.y - mid)
+            if idx < 0 or d < best: idx, best = i, d
         if idx < 0: return False
         l = self.ledges[idx]
         self.rope_left -= 1; self.st['rope'] += 1
-        self.place(l); self.stand = idx; self.no_land = -1
-        self.tumbling = False; self.land_ticks = LAND_TICKS
+        self.rope_phase = 'shoot'; self.rope_idx = idx; self.rope_ly = l.y
+        cx = self.cx >> FP
+        lo, hi = l.x + 6, l.x + l.w - 6
+        if lo > hi: lo = hi = l.x + l.w // 2
+        self.rope_ax = min(max(cx, lo), hi)
+        self.hook_dist = max(1, abs(self.rope_ax - cx), abs(feet - CLIMB_H - l.y))
+        self.hook_len = 0
+        self.vx = self.vy = 0; self.tumbling = False
+        return True
+
+    def rope_step(self):
+        l = self.ledges[self.rope_idx]
+        if l.w == 0 or l.type == GONE or l.y != self.rope_ly:
+            self.rope_phase = None; self.tumbling = True; return
+        if self.rope_phase == 'shoot':
+            self.hook_len += HOOK_SPEED
+            if self.hook_len >= self.hook_dist: self.rope_phase = 'climb'
+            return
+        left = (self.cy >> FP) - l.y
+        if left > ROPE_CLIMB_SPEED:
+            cx = self.cx >> FP
+            self.cx += cdiv((self.rope_ax - cx) * ROPE_CLIMB_SPEED << FP, left)
+            self.cy -= ROPE_CLIMB_SPEED << FP
+            return
+        self.rope_phase = None
+        self.place(l); self.cx = self.rope_ax << FP; self.stand = self.rope_idx; self.no_land = -1
+        self.land_ticks = LAND_TICKS
         if l.type == ICE: self.ice_dir = self.facing
         elif l.type == CRUMBLE and l.ct < 0: l.ct = self.crumble_t()
-        return True
 
     # --- one tick (order identical to game_tick) -------------------------------
     def tick(self):
@@ -204,7 +229,9 @@ class Game:
         self.ticks += 1
         if self.land_ticks > 0: self.land_ticks -= 1
         prev_feet = self.cy >> FP
-        if self.air:
+        if self.rope_phase:
+            self.rope_step()
+        elif self.air:
             self.vy += GRAVITY_FP
             self.cx += self.vx; self.cy += self.vy
             cx = self.cx >> FP
@@ -281,7 +308,7 @@ class Game:
             r[1] += P["ROCK_SPEED_FP"]
             ry = r[1] >> FP
             if ry - self.cam_y > H + 20: continue
-            if self.invuln == 0 and not safe_top:
+            if self.invuln == 0 and not safe_top and not self.rope_phase:
                 dx = (r[0] >> FP) - (self.cx >> FP); dy = ry - (self.cy >> FP)
                 if dx * dx + dy * dy < 12 * 12:
                     self.invuln = 45; self.knock(0, 'rock'); continue

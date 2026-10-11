@@ -109,9 +109,16 @@ static int8_t s_shop_sel;
 static int8_t s_shop_flash;               // "not enough gems" flash
 
 static int8_t s_rope_left;     // rescues left this run
-static int16_t s_rope_ticks;   // rope drawn for a moment after a rescue
-#define ROPE_TICKS 22          // ~0.7 s: rope hangs taut, then reels back up
-#define ROPE_REEL_TICKS 10     // ...the last this-many ticks it retracts
+// A rescue plays out in two steps: the hook flies up to a ledge near the
+// middle of the screen, then the climber hauls themself up the rope.
+typedef enum { ROPE_IDLE, ROPE_SHOOT, ROPE_CLIMB } RopePhase;
+static RopePhase s_rope_phase;
+static int16_t s_rope_ledge;          // ledge the hook caught
+static int16_t s_rope_ledge_y;        // ...and its y, to notice a recycled slot
+static int16_t s_rope_ax, s_rope_ay;  // anchor on that ledge's lip, world coords
+static int16_t s_hook_len, s_hook_dist; // hook flight so far / in total (px)
+#define HOOK_SPEED 18                 // px per tick the hook flies
+#define ROPE_CLIMB_SPEED 6            // px per tick hauling up the rope
 
 #define MAX_SPARKS 4
 #define SPARK_TICKS 12
@@ -122,8 +129,6 @@ typedef struct {
 } Spark;
 static Spark s_sparks[MAX_SPARKS];
 static int8_t s_gem_flash;     // HUD gem counter glows after a pickup
-static int16_t s_last_ledge_idx = -1; // ledge the climber last jumped from
-static int16_t s_last_ledge_y;        // ...and its y, to detect a recycled slot
 
 typedef enum { ST_TITLE, ST_PLAYING, ST_PAUSED, ST_GAMEOVER, ST_VICTORY, ST_SHOP } GameState;
 
@@ -409,10 +414,9 @@ static void start_run(void) {
   s_invuln_ticks = 0;
   s_summit_placed = false;
   s_rope_left = s_rope;
-  s_rope_ticks = 0;
+  s_rope_phase = ROPE_IDLE;
   s_gem_flash = 0;
   for (int i = 0; i < MAX_SPARKS; i++) s_sparks[i].ticks = 0;
-  s_last_ledge_idx = -1;
   s_tumbling = false;
   s_facing = 1;
   s_land_ticks = 0;
@@ -493,8 +497,6 @@ static void try_jump(int8_t dir) {
   if (s_state != ST_PLAYING || s_airborne) return;
   // On the summit the climber is already walking to the flag.
   if (s_standing_ledge_idx >= 0 && s_ledges[s_standing_ledge_idx].type == LEDGE_SUMMIT) return;
-  s_last_ledge_idx = s_standing_ledge_idx;
-  if (s_standing_ledge_idx >= 0) s_last_ledge_y = s_ledges[s_standing_ledge_idx].y;
   s_airborne = true;
   s_bounced = false;
   s_tumbling = false;
@@ -507,52 +509,85 @@ static void try_jump(int8_t dir) {
   layer_mark_dirty(s_layer);
 }
 
-// Climbing rope: while falling, SELECT hauls the climber back up onto the
-// ledge they last jumped from. If that ledge has crumbled or scrolled away,
-// the nearest ledge below them that's still clear of the mist will do. Only
-// ledges on screen count: the camera never scrolls down, so a ledge below
-// the bottom edge would leave the climber stranded out of sight.
+// Climbing rope: while airborne, SELECT fires the hook at the ledge nearest
+// the middle of the screen (above the climber, on screen and clear of the
+// HUD, so the rescue always ends in view), then the climber climbs it.
 static void try_rope(void) {
-  if (s_state != ST_PLAYING || !s_airborne || s_rope_left <= 0) return;
-  int32_t limit_y = (s_mist_top_fp >> FP) - 4;
-  int32_t screen_bottom_y = s_cam_y + s_bounds.size.h - 10;
-  if (screen_bottom_y < limit_y) limit_y = screen_bottom_y;
+  if (s_state != ST_PLAYING || !s_airborne || s_rope_left <= 0 ||
+      s_rope_phase != ROPE_IDLE) return;
+  int32_t feet_y = s_climber_y_fp >> FP;
+  int32_t top_y = s_cam_y + 34;
+  int32_t bottom_y = s_cam_y + s_bounds.size.h - 10;
+  int32_t mid_y = s_cam_y + s_bounds.size.h / 2;
   int idx = -1;
-  if (s_last_ledge_idx >= 0) {
-    const Ledge *l = &s_ledges[s_last_ledge_idx];
-    if (l->w != 0 && l->type != LEDGE_GONE && l->y == s_last_ledge_y && l->y < limit_y) {
-      idx = s_last_ledge_idx;
-    }
-  }
-  if (idx < 0) {
-    // Nearest usable ledge below the feet; failing that (the climber has
-    // dropped off the bottom of the screen), the lowest one still visible.
-    int32_t feet_y = s_climber_y_fp >> FP;
-    int below = -1, lowest = -1;
-    for (int i = 0; i < MAX_LEDGES; i++) {
-      const Ledge *l = &s_ledges[i];
-      if (l->w == 0 || l->type == LEDGE_GONE || l->y >= limit_y) continue;
-      if (l->y >= feet_y && (below < 0 || l->y < s_ledges[below].y)) below = i;
-      if (lowest < 0 || l->y > s_ledges[lowest].y) lowest = i;
-    }
-    idx = below >= 0 ? below : lowest;
+  int32_t best = 0;
+  for (int i = 0; i < MAX_LEDGES; i++) {
+    const Ledge *l = &s_ledges[i];
+    if (l->w == 0 || l->type == LEDGE_GONE) continue;
+    if (l->y < top_y || l->y > bottom_y || l->y > feet_y - 8) continue;
+    int32_t d = l->y > mid_y ? l->y - mid_y : mid_y - l->y;
+    if (idx < 0 || d < best) { idx = i; best = d; }
   }
   if (idx < 0) {
     vibes_double_pulse();
     return;
   }
-  Ledge *l = &s_ledges[idx];
+  const Ledge *l = &s_ledges[idx];
   s_rope_left--;
-  s_rope_ticks = ROPE_TICKS;
-  place_on_ledge(l);
-  s_standing_ledge_idx = (int16_t)idx;
-  s_ignore_ledge_idx = -1;
+  s_rope_phase = ROPE_SHOOT;
+  s_rope_ledge = (int16_t)idx;
+  s_rope_ledge_y = l->y;
+  // Hook the lip straight above the climber where possible.
+  int16_t cx = s_climber_x_fp >> FP;
+  int16_t lo = (int16_t)(l->x + 6), hi = (int16_t)(l->x + l->w - 6);
+  if (lo > hi) lo = hi = (int16_t)(l->x + l->w / 2);
+  s_rope_ax = cx < lo ? lo : (cx > hi ? hi : cx);
+  s_rope_ay = l->y;
+  int16_t dx = (int16_t)(s_rope_ax - cx), dy = (int16_t)(feet_y - SPR_CLIMB.h - l->y);
+  if (dx < 0) dx = (int16_t)-dx;
+  if (dy < 0) dy = (int16_t)-dy;
+  s_hook_dist = dx > dy ? dx : dy;
+  if (s_hook_dist < 1) s_hook_dist = 1;
+  s_hook_len = 0;
+  s_vx_fp = 0;
+  s_vy_fp = 0;
   s_tumbling = false;
+  vibes_short_pulse();
+  layer_mark_dirty(s_layer);
+}
+
+// One tick of a rescue in progress. Gravity is off while the hook flies and
+// the climber climbs; the mist keeps rising, so it's not entirely free.
+static void rope_step(void) {
+  Ledge *l = &s_ledges[s_rope_ledge];
+  if (l->w == 0 || l->type == LEDGE_GONE || l->y != s_rope_ledge_y) {
+    // The ledge crumbled (or scrolled away) under the hook: drop.
+    s_rope_phase = ROPE_IDLE;
+    s_tumbling = true;
+    return;
+  }
+  if (s_rope_phase == ROPE_SHOOT) {
+    s_hook_len += HOOK_SPEED;
+    if (s_hook_len >= s_hook_dist) s_rope_phase = ROPE_CLIMB;
+    return;
+  }
+  int32_t feet_y = s_climber_y_fp >> FP;
+  int32_t left = feet_y - l->y;
+  if (left > ROPE_CLIMB_SPEED) {
+    // Close in on the anchor sideways in step with the climb.
+    int32_t cx = s_climber_x_fp >> FP;
+    s_climber_x_fp += ((int32_t)(s_rope_ax - cx) * ROPE_CLIMB_SPEED << FP) / left;
+    s_climber_y_fp -= (int32_t)ROPE_CLIMB_SPEED << FP;
+    return;
+  }
+  s_rope_phase = ROPE_IDLE;
+  place_on_ledge(l);
+  s_climber_x_fp = (int32_t)s_rope_ax << FP;
+  s_standing_ledge_idx = s_rope_ledge;
+  s_ignore_ledge_idx = -1;
   s_land_ticks = LAND_TICKS;
   if (l->type == LEDGE_ICE) s_ice_dir = s_facing;
   else if (l->type == LEDGE_CRUMBLE && l->crumble_ticks < 0) l->crumble_ticks = crumble_ticks();
-  vibes_short_pulse();
-  layer_mark_dirty(s_layer);
 }
 
 static void game_tick(void *data) {
@@ -570,12 +605,13 @@ static void game_tick(void *data) {
 
   s_timer = app_timer_register(TICK_MS, game_tick, NULL);
   if (s_land_ticks > 0) s_land_ticks--;
-  if (s_rope_ticks > 0) s_rope_ticks--;
   if (s_gem_flash > 0) s_gem_flash--;
   for (int i = 0; i < MAX_SPARKS; i++) if (s_sparks[i].ticks > 0) s_sparks[i].ticks--;
   int16_t prev_feet_y = s_climber_y_fp >> FP;
 
-  if (s_airborne) {
+  if (s_rope_phase != ROPE_IDLE) {
+    rope_step();
+  } else if (s_airborne) {
     s_vy_fp += GRAVITY_FP;
     s_climber_x_fp += s_vx_fp;
     s_climber_y_fp += s_vy_fp;
@@ -709,7 +745,7 @@ static void game_tick(void *data) {
     r->y_fp += ROCK_SPEED_FP;
     int32_t ry = r->y_fp >> FP;
     if (ry - s_cam_y > s_bounds.size.h + 20) { r->active = false; continue; }
-    if (s_invuln_ticks == 0 && !safe_on_top) {
+    if (s_invuln_ticks == 0 && !safe_on_top && s_rope_phase == ROPE_IDLE) {
       int32_t rx = r->x_fp >> FP;
       int32_t dx = rx - (s_climber_x_fp >> FP);
       int32_t dy = ry - (s_climber_y_fp >> FP);
@@ -806,6 +842,7 @@ static bool on_summit(void) {
 }
 
 static const Sprite *climber_pose(void) {
+  if (s_rope_phase != ROPE_IDLE) return &SPR_CLIMB;
   if (s_airborne) {
     return (s_tumbling || s_vy_fp > FALL_POSE_VY_FP) ? &SPR_FALL : &SPR_JUMP;
   }
@@ -1121,27 +1158,31 @@ static void draw_game(GContext *ctx, GRect b) {
   int16_t cx = s_climber_x_fp >> FP;
   int16_t feet_y = (int16_t)((s_climber_y_fp >> FP) - s_cam_y);
   const Sprite *pose = climber_pose();
-  if (s_rope_ticks > 0) {
-    // The rope that just hauled the climber back up: it hangs taut from
-    // above for a moment, then reels back up out of the picture.
-    int16_t end = (int16_t)(feet_y - pose->h + 2);
-    if (s_rope_ticks < ROPE_REEL_TICKS) {
-      end = (int16_t)(18 + (end - 18) * s_rope_ticks / ROPE_REEL_TICKS);
+  int8_t facing = s_facing;
+  if (s_rope_phase != ROPE_IDLE) {
+    // Rope from the anchor (or the flying hook) down to the climber's
+    // gloves; while climbing, the pose mirrors to alternate hand over hand.
+    int16_t hx = cx, hy = (int16_t)(feet_y - pose->h + 2);
+    int16_t ax = s_rope_ax, ay = (int16_t)(s_rope_ay - s_cam_y - 1);
+    if (s_rope_phase == ROPE_SHOOT && s_hook_len < s_hook_dist) {
+      ax = (int16_t)(hx + (ax - hx) * s_hook_len / s_hook_dist);
+      ay = (int16_t)(hy + (ay - hy) * s_hook_len / s_hook_dist);
     }
-    if (end > 18) {
-      fill(ctx, GColorBlack, cx - 2, 18, 4, end - 18);
-      fill(ctx, GColorChromeYellow, cx - 1, 18, 2, end - 18);
-      for (int16_t y = (int16_t)(20 + (s_anim % 4)); y < end; y += 4) {
-        fill(ctx, GColorWindsorTan, cx - 1, y, 1, 1);   // twisted strands
-        fill(ctx, GColorWindsorTan, cx, (int16_t)(y + 2), 1, 1);
-      }
-      fill(ctx, GColorBlack, cx - 3, end - 1, 6, 3);     // the hook
-      fill(ctx, GColorLightGray, cx - 2, end, 4, 1);
+    if (hy > ay) {
+      graphics_context_set_stroke_color(ctx, GColorBlack);
+      graphics_context_set_stroke_width(ctx, 3);
+      graphics_draw_line(ctx, GPoint(hx, hy), GPoint(ax, ay));
+      graphics_context_set_stroke_color(ctx, GColorChromeYellow);
+      graphics_context_set_stroke_width(ctx, 1);
+      graphics_draw_line(ctx, GPoint(hx, hy), GPoint(ax, ay));
     }
+    fill(ctx, GColorBlack, (int16_t)(ax - 3), (int16_t)(ay - 2), 7, 3);   // the hook
+    fill(ctx, GColorLightGray, (int16_t)(ax - 2), (int16_t)(ay - 1), 5, 1);
+    if (s_rope_phase == ROPE_CLIMB && (s_anim / 4) % 2) facing = (int8_t)-facing;
   }
   // Blink the climber while invulnerable, as damage feedback.
   if (s_invuln_ticks == 0 || (s_invuln_ticks / 3) % 2 == 0) {
-    draw_standing(ctx, pose, cx, feet_y, s_facing, 1);
+    draw_standing(ctx, pose, cx, feet_y, facing, 1);
   }
   draw_sparks(ctx, b);
 
