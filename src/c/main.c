@@ -509,24 +509,33 @@ static void try_jump(int8_t dir) {
 
 // Climbing rope: while falling, SELECT hauls the climber back up onto the
 // ledge they last jumped from. If that ledge has crumbled or scrolled away,
-// the nearest ledge below them that's still clear of the mist will do.
+// the nearest ledge below them that's still clear of the mist will do. Only
+// ledges on screen count: the camera never scrolls down, so a ledge below
+// the bottom edge would leave the climber stranded out of sight.
 static void try_rope(void) {
   if (s_state != ST_PLAYING || !s_airborne || s_rope_left <= 0) return;
-  int32_t mist_y = (s_mist_top_fp >> FP) - 4;
+  int32_t limit_y = (s_mist_top_fp >> FP) - 4;
+  int32_t screen_bottom_y = s_cam_y + s_bounds.size.h - 10;
+  if (screen_bottom_y < limit_y) limit_y = screen_bottom_y;
   int idx = -1;
   if (s_last_ledge_idx >= 0) {
     const Ledge *l = &s_ledges[s_last_ledge_idx];
-    if (l->w != 0 && l->type != LEDGE_GONE && l->y == s_last_ledge_y && l->y < mist_y) {
+    if (l->w != 0 && l->type != LEDGE_GONE && l->y == s_last_ledge_y && l->y < limit_y) {
       idx = s_last_ledge_idx;
     }
   }
   if (idx < 0) {
+    // Nearest usable ledge below the feet; failing that (the climber has
+    // dropped off the bottom of the screen), the lowest one still visible.
     int32_t feet_y = s_climber_y_fp >> FP;
+    int below = -1, lowest = -1;
     for (int i = 0; i < MAX_LEDGES; i++) {
       const Ledge *l = &s_ledges[i];
-      if (l->w == 0 || l->type == LEDGE_GONE || l->y < feet_y || l->y >= mist_y) continue;
-      if (idx < 0 || l->y < s_ledges[idx].y) idx = i;
+      if (l->w == 0 || l->type == LEDGE_GONE || l->y >= limit_y) continue;
+      if (l->y >= feet_y && (below < 0 || l->y < s_ledges[below].y)) below = i;
+      if (lowest < 0 || l->y > s_ledges[lowest].y) lowest = i;
     }
+    idx = below >= 0 ? below : lowest;
   }
   if (idx < 0) {
     vibes_double_pulse();

@@ -176,16 +176,19 @@ class Game:
         self.vx = vx; self.vy = 0; self.stand = -1
     def use_rope(self):
         if self.state != "play" or not self.air or self.rope_left <= 0: return False
-        mist_y = (self.mist >> FP) - 4
+        mist_y = min((self.mist >> FP) - 4, self.cam_y + H - 10)  # on-screen ledges only
         idx = -1
         if self.last_idx >= 0:
             l = self.ledges[self.last_idx]
             if l.w != 0 and l.type != GONE and l.y == self.last_y and l.y < mist_y: idx = self.last_idx
         if idx < 0:
             feet = self.cy >> FP
+            below = lowest = -1
             for i, l in enumerate(self.ledges):
-                if l.w == 0 or l.type == GONE or l.y < feet or l.y >= mist_y: continue
-                if idx < 0 or l.y < self.ledges[idx].y: idx = i
+                if l.w == 0 or l.type == GONE or l.y >= mist_y: continue
+                if l.y >= feet and (below < 0 or l.y < self.ledges[below].y): below = i
+                if lowest < 0 or l.y > self.ledges[lowest].y: lowest = i
+            idx = below if below >= 0 else lowest
         if idx < 0: return False
         l = self.ledges[idx]
         self.rope_left -= 1; self.st['rope'] += 1
