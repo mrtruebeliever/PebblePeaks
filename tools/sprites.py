@@ -139,28 +139,25 @@ FRAMES = {
     ],
 }
 
-# Climbing the rope, seen from behind: one glove high on the rope, the
-# other below it, backpack in view, one knee pulled up. The game mirrors it
-# every few ticks so hands and legs alternate as the climber hauls up.
+# Hanging on the rope, seen from behind: beanie with pompom, backpack, legs
+# apart. Only the body: the game draws the arms and gloves on top, moving
+# hand over hand along the rope (draw_rope_arms in main.c). It's mirrored
+# every stroke so the legs alternate too.
 FRAMES["CLIMB"] = [
-    ".....KKKK.......",
-    "....KWWWWK......",
-    "....KWWWWK......",
-    "...KRKKKKKKK....",
-    "..KrRK.KWWWWK...",
-    "..KrRK.KWWWWK...",
-    ".KrRK..KKKKRK...",
-    ".KrRKKKKKKKRRK..",
-    ".KrRKRRRRRoKRrK.",
-    ".KrRKRRRRRRKRrK.",
-    ".KrRKRRRRRRKRrK.",
-    ".KrRKWWWWWWKRrK.",
-    ".KrRKNNNNNNKRrK.",
-    ".KrRSNNNNNNSRrK.",
-    ".KrRKNNNNNNKRrK.",
-    ".KrRKKnNNnKKRrK.",
-    ".KrRRKKssKKRRrK.",
-    ".KrRKPPPPPPKRrK.",
+    "......KKKK......",
+    ".....KWWWWK.....",
+    ".....KWWWWK.....",
+    "....KKKKKKKK....",
+    "...KRRRRRRoRK...",
+    "...KRRRRRRRRK...",
+    "...KrRRRRRRRK...",
+    "...KWWWWWWWWK...",
+    "...KNNNNNNNNK...",
+    "..KSNNNNNNNNSK..",
+    "...KNNNNNNNNK...",
+    "...KKnNNNNnKK...",
+    "..KKRKKssKKRKK..",
+    ".KRRKPPPPPPKRRK.",
     ".KrRKPppppPKRrK.",
     ".KrRKPPPPPPKRrK.",
     "..KrKPpPPpPKrK..",

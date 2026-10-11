@@ -186,3 +186,6 @@ Met de betere runs (meer verdiepingen) blijft het grind-doel ~35 runs voor decen
 * Gekozen: camera 55%, `KEEP_BELOW_PX 60` (ongewijzigd), redding naar de richel bij 67% van het scherm
   (`RESCUE_LINE_PCT`, ~een verdieping onder de cameralijn). Resultaat: geen uitrusting 184 m mediaan
   (238 m eerste run), touw 5 406 m, alles 5 939 m mediaan en top 41,7% (binnen de ruis van 37,5%).
+* Touwklimmen met zichtbare handen (hangen onder de handschoenen, dan optrekken op de rand) op
+  3 px/tick in plaats van 6: de mist krijgt meer tijd tijdens een redding. Resultaat (120 seeds):
+  geen uitrusting 184 m (238 m eerste run), touw 5 408 m, alles 5 830 m mediaan en top 30%, ~37 runs.

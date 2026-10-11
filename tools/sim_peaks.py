@@ -17,8 +17,9 @@ FP = 8
 CLIMBER_R = 7
 LAND_TICKS = 4
 HOOK_SPEED = 18         # rope: px/tick the hook flies
-ROPE_CLIMB_SPEED = 6    # rope: px/tick hauling up
-CLIMB_H = 29            # SPR_CLIMB height
+ROPE_CLIMB_SPEED = 3    # rope: px/tick hauling up
+CLIMB_H = 25            # SPR_CLIMB height
+ROPE_HANG = CLIMB_H + 2 # feet below the gloves while climbing
 GRAVITY_FP, JUMP_VX_FP, JUMP_VY0_FP = 200, 435, -2220
 REACH_FOR_GAP = [27, 27, 27, 25, 25, 25, 23, 23, 22, 22, 20]
 FLOOR_GAP_MIN, FLOOR_GAP_MAX = 34, 44
@@ -201,7 +202,7 @@ class Game:
         if lo > hi: lo = hi = l.x + l.w // 2
         self.rope_ax = min(max(cx, lo), hi)
         self.hook_dist = max(1, abs(self.rope_ax - cx), abs(feet - CLIMB_H - l.y))
-        self.hook_len = 0
+        self.hook_len = 0; self.mantle = False
         self.vx = self.vy = 0; self.tumbling = False
         return True
 
@@ -213,11 +214,18 @@ class Game:
             self.hook_len += HOOK_SPEED
             if self.hook_len >= self.hook_dist: self.rope_phase = 'climb'
             return
-        left = (self.cy >> FP) - l.y
+        # main.c rope_step: hang below the gloves up the rope, then mantle.
+        ty = l.y + ROPE_HANG
+        if not self.mantle and (self.cy >> FP) <= ty: self.mantle = True
+        if self.mantle: ty = l.y
+        dx = self.rope_ax - (self.cx >> FP); dy = ty - (self.cy >> FP)
+        left = max(1, abs(dx), abs(dy))
         if left > ROPE_CLIMB_SPEED:
-            cx = self.cx >> FP
-            self.cx += cdiv((self.rope_ax - cx) * ROPE_CLIMB_SPEED << FP, left)
-            self.cy -= ROPE_CLIMB_SPEED << FP
+            self.cx += cdiv(dx * ROPE_CLIMB_SPEED << FP, left)
+            self.cy += cdiv(dy * ROPE_CLIMB_SPEED << FP, left)
+            return
+        if not self.mantle:
+            self.cx = self.rope_ax << FP; self.cy = ty << FP; self.mantle = True
             return
         self.rope_phase = None
         self.place(l); self.cx = self.rope_ax << FP; self.stand = self.rope_idx; self.no_land = -1
