@@ -19,7 +19,7 @@ LAND_TICKS = 4
 HOOK_SPEED = 18         # rope: px/tick the hook flies
 ROPE_CLIMB_SPEED = 3    # rope: px/tick hauling up
 CLIMB_H = 29            # SPR_CLIMB height
-ROPE_HANG = CLIMB_H - 1 # feet below the top glove while climbing
+ROPE_SPAN = CLIMB_H - 1 # boots to top glove along the climb axis
 GRAVITY_FP, JUMP_VX_FP, JUMP_VY0_FP = 200, 435, -2220
 REACH_FOR_GAP = [27, 27, 27, 25, 25, 25, 23, 23, 22, 22, 20]
 FLOOR_GAP_MIN, FLOOR_GAP_MAX = 34, 44
@@ -203,6 +203,10 @@ class Game:
         self.rope_ax = min(max(cx, lo), hi)
         self.hook_dist = max(1, abs(self.rope_ax - cx), abs(feet - CLIMB_H - l.y))
         self.hook_len = 0; self.mantle = False
+        dx = self.rope_ax - cx; dy = l.y - feet
+        m = max(1, abs(dx), abs(dy))
+        if dy > -4: dx, dy, m = 0, -1, 1
+        self.rope_hx = int(dx * ROPE_SPAN / m); self.rope_hy = int(dy * ROPE_SPAN / m)
         self.vx = self.vy = 0; self.tumbling = False
         return True
 
@@ -215,17 +219,17 @@ class Game:
             if self.hook_len >= self.hook_dist: self.rope_phase = 'climb'
             return
         # main.c rope_step: hang below the gloves up the rope, then mantle.
-        ty = l.y + ROPE_HANG
+        ty = l.y - self.rope_hy; tx = self.rope_ax - self.rope_hx
         if not self.mantle and (self.cy >> FP) <= ty: self.mantle = True
-        if self.mantle: ty = l.y
-        dx = self.rope_ax - (self.cx >> FP); dy = ty - (self.cy >> FP)
+        if self.mantle: ty = l.y; tx = self.rope_ax
+        dx = tx - (self.cx >> FP); dy = ty - (self.cy >> FP)
         left = max(1, abs(dx), abs(dy))
         if left > ROPE_CLIMB_SPEED:
             self.cx += cdiv(dx * ROPE_CLIMB_SPEED << FP, left)
             self.cy += cdiv(dy * ROPE_CLIMB_SPEED << FP, left)
             return
         if not self.mantle:
-            self.cx = self.rope_ax << FP; self.cy = ty << FP; self.mantle = True
+            self.cx = tx << FP; self.cy = ty << FP; self.mantle = True
             return
         self.rope_phase = None
         self.place(l); self.cx = self.rope_ax << FP; self.stand = self.rope_idx; self.no_land = -1

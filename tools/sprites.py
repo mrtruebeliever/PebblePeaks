@@ -404,6 +404,10 @@ EXTRA = {
     "ROCK1": ROCK1,
 }
 
+# The rope climb turned on its side, glove end to the right, for ropes
+# flatter than 45 degrees: the climber lies along the rope instead.
+EXTRA["CLIMB_SIDE"] = rotate90(FRAMES["CLIMB"])
+
 ALL = {**FRAMES, **FLAG, **EXTRA}
 
 
