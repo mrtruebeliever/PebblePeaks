@@ -114,6 +114,9 @@ static int16_t s_flag_x, s_flag_y; // world coords of the pole's foot
 #define PK_FOUND 6
 #define PK_AIM 7
 #define PK_SOUND 8
+#define PK_BL_MODE 9
+#define PK_LIGHT_FX 10
+#define PK_VIBRATION 11
 
 #define MAX_LEVEL 5
 static const int32_t SHOP_COST[MAX_LEVEL] = {15, 40, 90, 160, 250};
@@ -160,6 +163,19 @@ static int16_t s_rope_hx, s_rope_hy;
 typedef enum { AIM_SWING, AIM_TILT } AimMode;
 static uint8_t s_aim_mode = AIM_SWING;
 static int8_t s_sound_vol = 1;  // 0=Off 1=Soft 2=Normal 3=Loud (pause screen, DOWN)
+
+// Settings (title screen, UP), laid out like PebbleDiver's. Backlight: Off
+// leaves it to the watch, Timeout keeps it lit while you play and dims 30 s
+// after the last button, Always keeps it on. Light effects: the sky-coloured
+// tint, and lighting up for the mist warning and on the summit.
+typedef enum { BL_OFF, BL_TIMED, BL_ALWAYS, NUM_BL_MODES } BacklightMode;
+#define BL_TIMEOUT_MS 30000
+static int8_t s_bl_mode = BL_OFF;
+static bool s_light_fx = true;
+static bool s_vibration_on = true;
+static int8_t s_settings_sel;     // settings-menu row
+static bool s_reset_armed;        // "Reset save" needs a confirming second press
+static AppTimer *s_backlight_timer;
 static bool s_aiming;
 static bool s_accel_on;
 static int32_t s_aim_angle;
@@ -193,7 +209,7 @@ typedef struct {
 static Spark s_sparks[MAX_SPARKS];
 static int8_t s_gem_flash;     // HUD gem counter glows after a pickup
 
-typedef enum { ST_TITLE, ST_PLAYING, ST_PAUSED, ST_GAMEOVER, ST_VICTORY, ST_SHOP } GameState;
+typedef enum { ST_TITLE, ST_PLAYING, ST_PAUSED, ST_GAMEOVER, ST_VICTORY, ST_SHOP, ST_SETTINGS } GameState;
 
 static Window *s_window;
 static Layer *s_layer;
@@ -237,6 +253,9 @@ enum {
   S_PAUSED, S_HINT_RESUME, S_HINT_QUIT, S_AIM_HINT,
   S_AIM_HINT_SWING, S_AIM_MODE, S_AIM_TILT, S_AIM_SWING,
   S_SOUND_MODE, S_SND_OFF, S_SND_SOFT, S_SND_NORMAL, S_SND_LOUD, S_SND_MUTED,
+  S_HINT_SETTINGS, S_SETTINGS_TITLE, S_OPT_BACKLIGHT, S_OPT_LIGHT_FX, S_OPT_VIBRATION,
+  S_OPT_SOUND, S_OPT_AIM, S_OPT_RESET, S_RESET_CONFIRM, S_ON, S_OFF, S_BL_TIMED, S_BL_ALWAYS,
+  S_SETTINGS_HINT,
   NUM_STRS
 };
 
@@ -252,6 +271,9 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "Tilt to aim · SELECT fires",
     "Wait for it · SELECT fires", "UP · aim: %s", "tilt", "swing",
     "DOWN · sound: %s", "off", "soft", "normal", "loud", "muted",
+    "UP · settings", "Settings", "Backlight", "Light effects", "Vibration",
+    "Sound", "Aiming", "Reset save", "Press again to erase", "On", "Off", "Timeout", "Always",
+    "UP/DOWN · move   SELECT · toggle   BACK · close",
   },
   [L_NL] = {
     "SELECT · klimmen", "OMLAAG · winkel", "Record: %ldm",
@@ -264,6 +286,9 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "Kantel om te richten · SELECT",
     "Wacht op het moment · SELECT", "OMHOOG · richten: %s", "kantelen", "slinger",
     "OMLAAG · geluid: %s", "uit", "zacht", "normaal", "luid", "gedempt",
+    "OMHOOG · instellingen", "Instellingen", "Verlichting", "Lichteffecten", "Trilling",
+    "Geluid", "Richten", "Wissen", "Nogmaals om te wissen", "Aan", "Uit", "Time-out", "Altijd",
+    "OMHOOG/OMLAAG · kiezen   SELECT · wisselen   TERUG · sluiten",
   },
   [L_FR] = {
     "SELECT · grimper", "BAS · boutique", "Record : %ldm",
@@ -276,6 +301,9 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "Inclinez pour viser · SELECT",
     "Au bon moment · SELECT", "HAUT · visée : %s", "inclinaison", "balancier",
     "BAS · son : %s", "coupé", "doux", "normal", "fort", "muet",
+    "HAUT · réglages", "Réglages", "Éclairage", "Effets lumineux", "Vibration",
+    "Son", "Visée", "Effacer", "Encore pour effacer", "Activé", "Désactivé", "Minuteur", "Toujours",
+    "HAUT/BAS · choisir   SELECT · basculer   RETOUR · fermer",
   },
   [L_DE] = {
     "SELECT · klettern", "RUNTER · Laden", "Rekord: %ldm",
@@ -286,8 +314,11 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "SELECT · kaufen  ZURÜCK · schließen", "Der Gipfel ist in Reichweite...", "MAX",
     "Pausiert", "SELECT · weiter", "ZURÜCK · beenden",
     "Kippen zum Zielen · SELECT",
-    "Im richtigen Moment · SELECT", "RAUF · Zielen: %s", "Kippen", "Pendel",
+    "Im richtigen Moment · SELECT", "HOCH · Zielen: %s", "Kippen", "Pendel",
     "RUNTER · Ton: %s", "aus", "leise", "normal", "laut", "stumm",
+    "HOCH · Einstellungen", "Einstellungen", "Beleuchtung", "Lichteffekte", "Vibration",
+    "Ton", "Zielen", "Löschen", "Nochmal zum Löschen", "An", "Aus", "Zeitlimit", "Immer",
+    "HOCH/RUNTER · wählen  SELECT · umschalten  ZURÜCK · schließen",
   },
   [L_ES] = {
     "SELECT · escalar", "ABAJO · tienda", "Récord: %ldm",
@@ -300,6 +331,9 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "Inclina para apuntar · SELECT",
     "En el momento justo · SELECT", "ARRIBA · apuntar: %s", "inclinar", "péndulo",
     "ABAJO · sonido: %s", "no", "suave", "normal", "alto", "silenciado",
+    "ARRIBA · ajustes", "Ajustes", "Luz", "Efectos de luz", "Vibración",
+    "Sonido", "Apuntar", "Borrar", "Otra vez para borrar", "Activado", "Desactivado", "Con tiempo", "Siempre",
+    "ARRIBA/ABAJO · elegir   SELECT · cambiar   ATRÁS · cerrar",
   },
 };
 
@@ -363,6 +397,9 @@ static void save_progress(void) {
   persist_write_bool(PK_FOUND, s_found);
   persist_write_int(PK_AIM, s_aim_mode);
   persist_write_int(PK_SOUND, s_sound_vol);
+  persist_write_int(PK_BL_MODE, s_bl_mode);
+  persist_write_bool(PK_LIGHT_FX, s_light_fx);
+  persist_write_bool(PK_VIBRATION, s_vibration_on);
 }
 
 static void load_progress(void) {
@@ -375,6 +412,10 @@ static void load_progress(void) {
   if (persist_exists(PK_AIM)) s_aim_mode = (uint8_t)persist_read_int(PK_AIM);
   if (persist_exists(PK_SOUND)) s_sound_vol = (int8_t)persist_read_int(PK_SOUND);
   if (s_sound_vol < 0 || s_sound_vol > 3) s_sound_vol = 1;
+  if (persist_exists(PK_BL_MODE)) s_bl_mode = (int8_t)persist_read_int(PK_BL_MODE);
+  if (s_bl_mode < 0 || s_bl_mode >= NUM_BL_MODES) s_bl_mode = BL_OFF;
+  if (persist_exists(PK_LIGHT_FX)) s_light_fx = persist_read_bool(PK_LIGHT_FX);
+  if (persist_exists(PK_VIBRATION)) s_vibration_on = persist_read_bool(PK_VIBRATION);
 }
 
 // Grip soles: less ice slide (1.5 -> 0.4 px/tick) and crumble ledges hold
@@ -645,6 +686,11 @@ static void sfx_win(void) {
   sfx_tracks(t, SFX_N(t));
 }
 
+// Vibration, gated by the setting.
+static void vibe_short(void)  { if (s_vibration_on) vibes_short_pulse(); }
+static void vibe_long(void)   { if (s_vibration_on) vibes_long_pulse(); }
+static void vibe_double(void) { if (s_vibration_on) vibes_double_pulse(); }
+
 // ---------------------------------------------------------------------------
 // Run lifecycle
 // ---------------------------------------------------------------------------
@@ -729,7 +775,7 @@ static void end_run_locked(GameState state) {
 
 static void trigger_game_over(void) {
   end_run_locked(ST_GAMEOVER);
-  vibes_long_pulse();
+  vibe_long();
   sfx_frozen(s_new_record);
 }
 
@@ -737,8 +783,9 @@ static void trigger_victory(void) {
   s_found = true;
   s_best_height_m = SUMMIT_M;
   end_run_locked(ST_VICTORY);
-  vibes_double_pulse();
+  vibe_double();
   sfx_win();
+  if (s_light_fx) light_enable_interaction();
 }
 
 static void knock_off(int32_t vx_fp) {
@@ -816,7 +863,7 @@ static void begin_rope(int idx, int16_t x) {
   s_vx_fp = 0;
   s_vy_fp = 0;
   s_tumbling = false;
-  vibes_short_pulse();
+  vibe_short();
   sfx_throw();
   layer_mark_dirty(s_layer);
 }
@@ -889,7 +936,7 @@ static void fire_aimed_rope(void) {
   s_rope_ay = (int16_t)(y + 1);  // drawn 1 px up, like a hook on a lip
   s_hook_dist = cheb_dist(x - (s_climber_x_fp >> FP), hand_y() - y);
   s_hook_len = 0;
-  vibes_short_pulse();
+  vibe_short();
   sfx_throw();
   layer_mark_dirty(s_layer);
 }
@@ -935,7 +982,7 @@ static void try_rope(void) {
     if (idx < 0 || d < best) { idx = i; best = d; }
   }
   if (idx < 0) {
-    vibes_double_pulse();
+    vibe_double();
     return;
   }
   // Hook the lip straight above the climber where possible.
@@ -1180,7 +1227,7 @@ static void game_tick(void *data) {
       if (dx * dx + dy * dy < rr * rr) {
         r->active = false;
         s_invuln_ticks = 45;
-        vibes_short_pulse();
+        vibe_short();
         sfx_hit();
         knock_off(0);
       }
@@ -1233,7 +1280,10 @@ static void game_tick(void *data) {
     return;
   }
   // Same red line as the HUD gauge: beep every 1.3 s while the mist is close.
-  if ((s_mist_top_fp >> FP) - (s_climber_y_fp >> FP) < 30 && s_anim % 40 == 0) sfx_danger();
+  if ((s_mist_top_fp >> FP) - (s_climber_y_fp >> FP) < 30 && s_anim % 40 == 0) {
+    sfx_danger();
+    if (s_light_fx) light_enable_interaction();  // so the red pulse is seen
+  }
 
   layer_mark_dirty(s_layer);
 }
@@ -1663,8 +1713,10 @@ static void draw_sun_or_moon(GContext *ctx, const BgPalette *pal, int32_t height
   graphics_fill_circle(ctx, GPoint(150, y), (uint16_t)r);
 }
 
-// rise: px climbed so far (camera), for the layers' parallax.
-static void draw_background(GContext *ctx, GRect b, int32_t height_m, int32_t rise) {
+// rise: px climbed so far (camera), for the layers' parallax. sky_objects:
+// sun, moon and clouds (left out behind the title's text).
+static void draw_background(GContext *ctx, GRect b, int32_t height_m, int32_t rise,
+                            bool sky_objects) {
   const BgPalette *pal = bg_palette(height_m);
   for (int i = 0; i < 5; i++) {
     fill(ctx, argb(pal->sky[i]), 0, SKY_BAND_Y[i], b.size.w,
@@ -1672,7 +1724,7 @@ static void draw_background(GContext *ctx, GRect b, int32_t height_m, int32_t ri
   }
   if (height_m >= 600) draw_stars(ctx, b, rise);
   if (height_m >= 800) draw_aurora(ctx, b);
-  draw_sun_or_moon(ctx, pal, height_m);
+  if (sky_objects) draw_sun_or_moon(ctx, pal, height_m);
 
   // Far snowy range: sinks 1 px per 72 climbed, so its tips stay in view
   // until dusk, far below.
@@ -1680,7 +1732,7 @@ static void draw_background(GContext *ctx, GRect b, int32_t height_m, int32_t ri
              argb(pal->far_lit), argb(pal->far_shade), argb(pal->snow_lit), argb(pal->snow_shade));
 
   // Clouds drift sideways and slide down past the climber at 1/3 speed.
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; sky_objects && i < 4; i++) {
     int16_t w = (int16_t)(26 + (i * 11) % 18);
     int32_t span = b.size.w + 80;
     int32_t cx = ((i * 71 + 30) + s_anim / (4 + i)) % span - 40;
@@ -1712,6 +1764,37 @@ static void set_light_tint(uint32_t rgb) {
   s_light_rgb = rgb;
   if (rgb == 0) light_set_system_color();
   else light_set_color_rgb888(rgb);
+}
+
+// Backlight setting. Always forces the light on until the app lets go;
+// Timeout keeps it on while buttons are pressed and dims after
+// BL_TIMEOUT_MS without one; Off hands back to the watch's own auto-dim.
+static void backlight_timeout(void *data) {
+  s_backlight_timer = NULL;
+  light_enable(false);
+}
+
+static void backlight_touch(void) {
+  if (s_bl_mode != BL_TIMED) return;
+  light_enable(true);
+  if (s_backlight_timer) app_timer_reschedule(s_backlight_timer, BL_TIMEOUT_MS);
+  else s_backlight_timer = app_timer_register(BL_TIMEOUT_MS, backlight_timeout, NULL);
+}
+
+static void backlight_stop_timer(void) {
+  if (s_backlight_timer) {
+    app_timer_cancel(s_backlight_timer);
+    s_backlight_timer = NULL;
+  }
+}
+
+static void apply_backlight(void) {
+  backlight_stop_timer();
+  switch (s_bl_mode) {
+    case BL_ALWAYS: light_enable(true); break;
+    case BL_TIMED:  backlight_touch(); break;
+    default:        light_enable(false); break;
+  }
 }
 
 static GColor gem_color(uint8_t idx) {
@@ -1857,7 +1940,7 @@ static void draw_hud(GContext *ctx, GRect b) {
 }
 
 static void draw_game(GContext *ctx, GRect b) {
-  draw_background(ctx, b, s_height_m, -s_cam_y);
+  draw_background(ctx, b, s_height_m, -s_cam_y, true);
 
   draw_ledges(ctx);
   draw_flag(ctx);
@@ -1958,7 +2041,7 @@ static void draw_scene_ledge(GContext *ctx, GRect b, int16_t x, int16_t y, int16
 }
 
 static void draw_title(GContext *ctx, GRect b) {
-  draw_background(ctx, b, 0, 0);
+  draw_background(ctx, b, 0, 0, false);
 
   draw_center_text(ctx, "Pebble Peaks", s_f28b, 4, 34, b, GColorWhite);
   char buf[40];
@@ -1980,7 +2063,83 @@ static void draw_title(GContext *ctx, GRect b) {
   }
 
   draw_center_text(ctx, S(S_HINT_CLIMB), s_f18b, 156, 24, b, GColorWhite);
-  draw_center_text(ctx, S(S_HINT_SHOP), s_f18b, 180, 24, b, GColorWhite);
+  draw_center_text(ctx, S(S_HINT_SHOP), s_f18b, 178, 24, b, GColorWhite);
+  draw_center_text(ctx, S(S_HINT_SETTINGS), s_f18b, 200, 24, b, GColorWhite);
+}
+
+#define NUM_SETTINGS 6
+
+// Values are listed with a capital; the pause screen uses the same words
+// mid-sentence, in lower case.
+static const char *capitalized(const char *str, char *buf, size_t n) {
+  snprintf(buf, n, "%s", str);
+  if (buf[0] >= 'a' && buf[0] <= 'z') buf[0] = (char)(buf[0] - 'a' + 'A');
+  return buf;
+}
+
+static void draw_settings(GContext *ctx, GRect b) {
+  fill(ctx, GColorOxfordBlue, 0, 0, b.size.w, b.size.h);
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, S(S_SETTINGS_TITLE), s_f24b, GRect(8, 0, b.size.w - 16, 30),
+                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+
+  const char *labels[NUM_SETTINGS] = { S(S_OPT_BACKLIGHT), S(S_OPT_LIGHT_FX), S(S_OPT_VIBRATION),
+                                       S(S_OPT_SOUND), S(S_OPT_AIM), S(S_OPT_RESET) };
+  for (int i = 0; i < NUM_SETTINGS; i++) {
+    int16_t y = (int16_t)(32 + i * 28);
+    GRect row = GRect(6, y, b.size.w - 12, 26);
+    // Reset, once armed, becomes a red confirm bar.
+    if (i == NUM_SETTINGS - 1 && s_reset_armed) {
+      graphics_context_set_fill_color(ctx, GColorRed);
+      graphics_fill_rect(ctx, row, 4, GCornersAll);
+      graphics_context_set_stroke_color(ctx, GColorWhite);
+      graphics_draw_round_rect(ctx, row, 4);
+      graphics_context_set_text_color(ctx, GColorWhite);
+      graphics_draw_text(ctx, S(S_RESET_CONFIRM), s_f18b, GRect(row.origin.x + 8, y + 1, row.size.w - 16, 22),
+                         GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+      continue;
+    }
+    if (i == s_settings_sel) {
+      graphics_context_set_fill_color(ctx, GColorCobaltBlue);
+      graphics_fill_rect(ctx, row, 4, GCornersAll);
+      graphics_context_set_stroke_color(ctx, GColorWhite);
+      graphics_draw_round_rect(ctx, row, 4);
+    }
+    graphics_context_set_text_color(ctx, GColorWhite);
+    graphics_draw_text(ctx, labels[i], s_f18b, GRect(row.origin.x + 8, y + 1, row.size.w - 84, 22),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+    if (i == NUM_SETTINGS - 1) continue;  // Reset has no value
+
+    const char *vt;
+    bool active = true;
+    switch (i) {
+      case 0:
+        vt = s_bl_mode == BL_ALWAYS ? S(S_BL_ALWAYS) : s_bl_mode == BL_TIMED ? S(S_BL_TIMED) : S(S_OFF);
+        active = s_bl_mode != BL_OFF;
+        break;
+      case 1:
+        vt = s_light_fx ? S(S_ON) : S(S_OFF);
+        active = s_light_fx;
+        break;
+      case 2:
+        vt = s_vibration_on ? S(S_ON) : S(S_OFF);
+        active = s_vibration_on;
+        break;
+      case 3:
+        vt = S(s_sound_vol == 0 ? S_SND_OFF : speaker_is_muted() ? S_SND_MUTED : S_SND_OFF + s_sound_vol);
+        active = s_sound_vol > 0 && !speaker_is_muted();
+        break;
+      default:
+        vt = S(s_aim_mode == AIM_TILT ? S_AIM_TILT : S_AIM_SWING);
+        break;
+    }
+    char buf[24];
+    graphics_context_set_text_color(ctx, active ? GColorGreen : GColorLightGray);
+    graphics_draw_text(ctx, capitalized(vt, buf, sizeof(buf)), s_f14,
+                       GRect(row.origin.x + row.size.w - 82, y + 4, 76, 20),
+                       GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
+  }
+  draw_center_text(ctx, S(S_SETTINGS_HINT), s_f14, (int16_t)(b.size.h - 34), 34, b, GColorLightGray);
 }
 
 static void draw_gameover(GContext *ctx, GRect b) {
@@ -2006,7 +2165,7 @@ static void draw_gameover(GContext *ctx, GRect b) {
 }
 
 static void draw_victory(GContext *ctx, GRect b) {
-  draw_background(ctx, b, SUMMIT_M, 9000);
+  draw_background(ctx, b, SUMMIT_M, 9000, true);
   draw_center_text(ctx, S(S_WIN_TITLE), s_f24b, 4, 56, b, GColorPastelYellow);
 
   // Summit scene: the climber hopping for joy beside the planted flag.
@@ -2110,7 +2269,9 @@ static void layer_update(Layer *layer, GContext *ctx) {
   // Backlight tint (see set_light_tint): the sky's time of day while
   // climbing, pulsing red once the mist gauge goes red, gold on the summit.
   uint32_t tint = 0;
-  if (s_state == ST_PLAYING || s_state == ST_PAUSED) {
+  if (!s_light_fx) {
+    // Light effects off: the user's own colour throughout.
+  } else if (s_state == ST_PLAYING || s_state == ST_PAUSED) {
     tint = bg_palette(s_height_m)->light;
     int32_t gap = (s_mist_top_fp >> FP) - (s_climber_y_fp >> FP);
     if (s_state == ST_PLAYING && gap < 30 && (s_anim / 8) % 2) tint = 0xFF4040;
@@ -2141,6 +2302,9 @@ static void layer_update(Layer *layer, GContext *ctx) {
       break;
     case ST_GAMEOVER:
       draw_gameover(ctx, b);
+      break;
+    case ST_SETTINGS:
+      draw_settings(ctx, b);
       break;
     case ST_VICTORY:
       draw_victory(ctx, b);
@@ -2176,7 +2340,7 @@ static void try_buy(void) {
     // Restart the flash on every failed buy instead of stacking timers.
     if (s_flash_timer) app_timer_cancel(s_flash_timer);
     s_flash_timer = app_timer_register(600, shop_flash_end, NULL);
-    vibes_double_pulse();
+    vibe_double();
     sfx_deny();
     layer_mark_dirty(s_layer);
     return;
@@ -2184,7 +2348,7 @@ static void try_buy(void) {
   s_gems_total -= cost;
   (*lvl[(int)s_shop_sel])++;
   save_progress();
-  vibes_short_pulse();
+  vibe_short();
   sfx_buy();
   layer_mark_dirty(s_layer);
 }
@@ -2206,9 +2370,71 @@ static bool end_screen_unlocked(void) {
   return (s_state == ST_GAMEOVER || s_state == ST_VICTORY) && s_lock_ticks == 0;
 }
 
+// Wipes run progress (gems, record, gear, the summit flag) and leaves the
+// settings as they are.
+static void reset_save(void) {
+  s_gems_total = 0;
+  s_alltime_best_m = 0;
+  s_grip = s_jacket = s_rope = 0;
+  s_found = false;
+  s_new_record = false;
+  save_progress();
+  vibe_short();
+  sfx_deny();
+}
+
+static void toggle_setting(void) {
+  switch (s_settings_sel) {
+    case 0:
+      s_bl_mode = (int8_t)((s_bl_mode + 1) % NUM_BL_MODES);  // Off -> Timeout -> Always
+      apply_backlight();
+      persist_write_int(PK_BL_MODE, s_bl_mode);
+      break;
+    case 1:
+      s_light_fx = !s_light_fx;
+      persist_write_bool(PK_LIGHT_FX, s_light_fx);
+      if (s_light_fx) light_enable_interaction();  // show it
+      break;
+    case 2:
+      s_vibration_on = !s_vibration_on;
+      persist_write_bool(PK_VIBRATION, s_vibration_on);
+      vibe_short();  // a sample buzz when turning it on
+      break;
+    case 3:
+      s_sound_vol = (int8_t)((s_sound_vol + 1) % 4);  // Off -> Soft -> Normal -> Loud
+      persist_write_int(PK_SOUND, s_sound_vol);
+      sfx_gem();  // a sample at the new level
+      break;
+    case 4:
+      s_aim_mode = s_aim_mode == AIM_TILT ? AIM_SWING : AIM_TILT;
+      persist_write_int(PK_AIM, s_aim_mode);
+      break;
+    default:
+      if (s_reset_armed) {
+        reset_save();
+        s_reset_armed = false;
+      } else {
+        s_reset_armed = true;  // first press arms, a second one wipes
+      }
+      break;
+  }
+  layer_mark_dirty(s_layer);
+}
+
 static void up_click(ClickRecognizerRef rec, void *ctx) {
+  backlight_touch();
   switch (s_state) {
-    case ST_TITLE: start_run(); break;
+    case ST_TITLE:
+      s_settings_sel = 0;
+      s_reset_armed = false;
+      s_state = ST_SETTINGS;
+      layer_mark_dirty(s_layer);
+      break;
+    case ST_SETTINGS:
+      if (s_settings_sel > 0) s_settings_sel--;
+      s_reset_armed = false;
+      layer_mark_dirty(s_layer);
+      break;
     case ST_PLAYING: stop_aim(); try_jump(-1); break;
     case ST_PAUSED:  // switch aiming style
       s_aim_mode = s_aim_mode == AIM_TILT ? AIM_SWING : AIM_TILT;
@@ -2226,7 +2452,13 @@ static void up_click(ClickRecognizerRef rec, void *ctx) {
 }
 
 static void down_click(ClickRecognizerRef rec, void *ctx) {
+  backlight_touch();
   switch (s_state) {
+    case ST_SETTINGS:
+      if (s_settings_sel < NUM_SETTINGS - 1) s_settings_sel++;
+      s_reset_armed = false;
+      layer_mark_dirty(s_layer);
+      break;
     case ST_TITLE: open_shop(); break;
     case ST_PLAYING: stop_aim(); try_jump(1); break;
     case ST_PAUSED:  // cycle the sound level, with a sample at the new one
@@ -2248,7 +2480,9 @@ static void down_click(ClickRecognizerRef rec, void *ctx) {
 }
 
 static void select_click(ClickRecognizerRef rec, void *ctx) {
+  backlight_touch();
   switch (s_state) {
+    case ST_SETTINGS: toggle_setting(); break;
     case ST_TITLE: start_run(); break;
     case ST_PLAYING:
       if (s_aiming) fire_aimed_rope();
@@ -2269,7 +2503,12 @@ static void select_click(ClickRecognizerRef rec, void *ctx) {
 }
 
 static void back_click(ClickRecognizerRef rec, void *ctx) {
+  backlight_touch();
   switch (s_state) {
+    case ST_SETTINGS:
+      s_reset_armed = false;
+      go_title();
+      break;
     case ST_PLAYING:
       if (s_aiming) {  // BACK just lowers the hook
         stop_aim();
@@ -2333,6 +2572,7 @@ static void init(void) {
   srand(time(NULL));
   pick_language();
   load_progress();
+  apply_backlight();
   s_f14 = fonts_get_system_font(FONT_KEY_GOTHIC_14);
   s_f18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);
   s_f24b = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);
@@ -2351,6 +2591,8 @@ static void init(void) {
 
 static void deinit(void) {
   stop_timer();
+  backlight_stop_timer();
+  light_enable(false);  // back to the watch's own auto-dim
   if (s_state == ST_PLAYING || s_state == ST_PAUSED) finish_run();
   save_progress();
   app_focus_service_unsubscribe();

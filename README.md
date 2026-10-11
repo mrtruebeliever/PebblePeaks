@@ -39,11 +39,22 @@ Drie upgrades, elk 5 niveaus, kosten 15/40/90/160/250 edelstenen:
     er altijd weer af kunt haken. Mis je, dan ben je het touw kwijt.
   - Losse touwrollen (zeldzaam) geven +1 touw, tot 9 tegelijk.
 
-## Instellingen (pauzescherm, TERUG tijdens het klimmen)
+## Instellingen (OMHOOG vanaf het titelscherm)
 
-- **OMHOOG:** richtstijl, slinger of kantelen.
-- **OMLAAG:** geluid, uit/zacht/normaal/luid. Quiet Time en de mute van het
-  horloge gaan altijd voor.
+- **Verlichting:** uit (het horloge regelt het), time-out (aan tijdens het
+  spelen, uit 30 s na de laatste knop) of altijd.
+- **Lichteffecten:** het licht kleurt mee met de lucht, pulseert rood bij de
+  mistwaarschuwing en kleurt goud op de top; bij die twee gaat het licht ook
+  even aan.
+- **Trilling:** aan/uit.
+- **Geluid:** uit/zacht/normaal/luid. Quiet Time en de mute van het horloge
+  gaan altijd voor.
+- **Richten:** slinger of kantelen.
+- **Wissen:** edelstenen, record, uitrusting en de topvlag (twee keer
+  drukken); de instellingen blijven.
+
+Tijdens het klimmen wisselt het pauzescherm (TERUG) richten met OMHOOG en
+geluid met OMLAAG.
 
 ## Talen
 

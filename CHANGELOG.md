@@ -32,6 +32,11 @@
   on the Time 2 speaker. Sound level Off/Soft/Normal/Loud on the pause
   screen (DOWN); Quiet Time and the watch's mute always win.
 - **Tinted backlight.** While the light is on it takes the sky's colour,
-  pulses red when the mist is close, and glows gold on the summit.
+  pulses red when the mist is close, and glows gold on the summit; the mist
+  warning and the summit also switch the light on for a moment.
+- **Settings** (UP on the title screen), as in PebbleDiver: Backlight
+  (off/timeout/always), Light effects, Vibration, Sound, Aiming, and Reset
+  save. The pause screen keeps quick switches for aiming (UP) and sound
+  (DOWN).
 - **Five languages:** English, Nederlands, Français, Deutsch, Español,
   following the watch's language.
