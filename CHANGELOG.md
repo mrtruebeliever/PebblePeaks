@@ -1,0 +1,20 @@
+# Changelog
+
+## 1.0.0
+
+- **First release.** A vertical climber for the Pebble Time 2: UP jumps
+  up-left, DOWN jumps up-right along a fixed arc, no steering mid-air. Climb
+  from ledge to ledge while freezing mist rises from below.
+- **Ledges with character.** Snow-capped rock, slippery ice with icicles
+  (you slide toward the edge) and cracked crumble ledges that tremble, sag
+  and give way, then grow back a few seconds later. Falling rocks from 300 m.
+- **Gems and a shop.** Gems carry over between runs. Spend them on Grip
+  soles, a Down jacket and a Climbing rope (SELECT mid-air hauls you back to
+  your last ledge), five levels each.
+- **The summit.** At 1000 m the mountain ends in a flag. Reach it with full
+  gear, walk over and grab it; the flag then stands beside your climber on
+  the title screen.
+- **16-bit look.** Pixel-art climber with jump, fall and landing poses,
+  sparkling gems, tumbling boulders and a sky that darkens to stars.
+- **Five languages:** English, Nederlands, Français, Deutsch, Español,
+  following the watch's language.

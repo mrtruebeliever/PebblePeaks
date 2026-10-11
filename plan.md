@@ -30,8 +30,8 @@ alleen haalbaar met volledige uitrusting (spiegel van de magische Pebble).
 - Camera volgt de klimmer omhoog: zodra hij boven 40% van het scherm komt,
   scrollt de wereld omlaag (klassiek Icy Tower). Hoogte in meters =
   totale scroll / 12 (zelfde schaal als PebbleDiver-diepte).
-- **Mist** stijgt van onder: begint 60 px onder de klimmer, stijgt 0,35 px/tick,
-  versnelt met hoogte (+10% per 100 m, max 1,2 px/tick). Klimmer in de mist =
+- **Mist** stijgt van onder: begint 60 px onder de klimmer, stijgt 0,59 px/tick,
+  versnelt met hoogte (+8% per 100 m, max 1,03 px/tick). Klimmer in de mist =
   game over ("Bevroren!"). Mist tekenen als LightGray-band met golvende
   bovenrand (sinuslijn) en 30%-dither erboven (om de 2 px een pixel).
 - Richels: procedureel per "verdieping" (om de 34–44 px hoogte 1–2 richels,
@@ -39,7 +39,7 @@ alleen haalbaar met volledige uitrusting (spiegel van de magische Pebble).
   de vorige verdieping — check met de vaste sprongboog; zo niet, corrigeer).
   Hoger = smaller en verder uit elkaar.
 - Speciale richels vanaf 150 m: brokkelrichel (verdwijnt 0,8 s na landing,
-  bruin, trilt eerst), ijsrichel (klimmer glijdt 1,5 px/tick naar de richelrand,
+  bruin, trilt eerst; komt 3 s later terug, intussen een gestippelde omtrek), ijsrichel (klimmer glijdt 1,5 px/tick naar de richelrand,
   Celeste-kleur). Vanaf 300 m: vallende stenen (spawn boven, recht omlaag,
   raak = terugvallen naar richel eronder + korte invulnerability).
 - Achtergrond: lucht wordt donkerder met hoogte (VividCerulean → CobaltBlue →
@@ -58,7 +58,7 @@ kleuren, zweven boven sommige richels.
 
 Valuta: edelstenen. Drie upgrades × 5 levels, kosten 15/40/90/160/250:
 - **Gripzolen** — minder ijsglijden en brokkelrichels houden 0,15 s langer.
-- **Donsjack** — de mist start verder weg en stijgt 4% trager per level.
+- **Donsjack** — de mist start 30 px verder weg en stijgt 6% trager per level.
 - **Klimtouw** — SELECT-noodgreep: 1 gebruik per run per level (max 5).
 Alles max → de top op 1000 m is haalbaar; vlag pakken = ST_VICTORY
 ("Je hebt de top bereikt!"), trofee-vlaggetje op het titelscherm, persist
@@ -130,7 +130,8 @@ Griffsohlen/Daunenjacke/Kletterseil), "Je hebt de top bereikt!".
   `ICE_SLIDE_FP` (1.5 px/tick, Gripzolen vertraagt dit), `CRUMBLE_TICKS`
   (24 ticks/0.8s, Gripzolen verlengt met 0,15s/level), en de mist-formule
   in `game_tick` (`MIST_GAP_START`/`MIST_BASE_SPEED_FP`/schaal-berekening,
-  Donsjack vergroot de startafstand en vertraagt de stijging 4%/level).
+  Donsjack vergroot de startafstand en vertraagt de stijging 4%/level — sinds
+  milestone 5: 30 px en 6%/level).
 - **Moeilijkheidscurve-keuzes** (niet expliciet gespecificeerd in het plan,
   zelf gekozen, hou hier rekening mee bij tuning): speciale-richel-kans
   = `(hoogte_m - 150) / 10`%, capped op 30%; vallende-stenen-kans
@@ -146,7 +147,7 @@ Griffsohlen/Daunenjacke/Kletterseil), "Je hebt de top bereikt!".
 
 Volledig met press.py testbaar: `up`/`down` clicks om te springen (kopie
 staat al in `tools/press.py`). Voor de GIF: afwisselend up/down met sleeps.
-Game over forceren: niets doen (de mist start 60 px lager en stijgt 0,35 px/tick, dus hij haalt je in ~6 s; in de emulator zelfs ~4 s). Victory testen
+Game over forceren: niets doen (de mist start 60 px lager en stijgt sinds milestone 5 0,59 px/tick, dus hij haalt je in ~3,5 s; met Donsjack 5 ~15 s). Victory testen
 met RAM-override (upgrades max + top op 30 m TIJDELIJK) — zie de
 TEMP-procedure in COMMON.md.
 
@@ -167,3 +168,22 @@ qemu-proces dat een herstart nodig had) — reken niet blind op de eerste
 klik/screenshot na een `pebble install`, en wees bereid de emulator
 opnieuw op te starten als install/screenshot een paar keer achter elkaar
 timeout geeft.
+
+## Tuning (milestone 5)
+
+Toegepast uit `tools/TUNING.md` (simulator `tools/sim_peaks.py`, nu gelijk aan main.c; `--old` = vóór de tuning):
+- **Knock-off-fix**: wie van een richel wordt gegooid (ijs, steen, brokkel) kan niet direct weer op díe
+  richel landen (`s_ignore_ledge_idx`). Dekt de ijs-softlock bij Gripzolen 4-5 én maakt stenen echt
+  gevaarlijk (eerder landde je na een treffer meteen weer op dezelfde richel). Op de top raken stenen niet.
+- **Brokkelrichels komen terug**: `LEDGE_GONE`, na `CRUMBLE_RESPAWN_TICKS` 90 (3 s) weer heel; niet
+  landbaar, geen touwdoel, getekend als gestippelde omtrek (laatste 0,5 s dichter/wit).
+- **Mist**: 0,59 px/tick start (`MIST_BASE_SPEED_FP` 150), +8%/100 m (slope 20), max 1,03 px/tick
+  (`MIST_MAX_SCALE_FP` 450). Donsjack: 30 px/level verder weg, 6%/level trager.
+- **Edelstenen**: 40% kans per richel (was 55%).
+
+Simulatie (decent-profiel, 300 seeds): geen gear mediaan 230 m; touw 5 408 m; alles 4 633 m (top 3%);
+**alles 5 794 m, top 20%**; alle 15 levels na ~36 runs (p10-p90 33-38), eerste top rond run 33.
+De analist voorspelde ~42% top bij alles 5: dat verschil komt van de stenen, die in zijn model door de
+re-land-bug vrijwel onschadelijk waren (met stenen uit: 44%). Daarom is de
+stenen-kans gemaximeerd op 3% i.p.v. 6% (`ROCK_CAP` 3): **alles 5 → mediaan 840 m, top 31%** (200 seeds),
+d.w.z. met volle uitrusting gemiddeld een derde poging. Nog te bevestigen met een speeltest op hardware.

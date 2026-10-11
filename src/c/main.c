@@ -34,12 +34,15 @@ static const int8_t REACH_FOR_GAP[11] = { 27, 27, 27, 25, 25, 25, 23, 23, 22, 22
 // World-coordinate ledges (y grows downward, same convention as before,
 // just no longer a fixed compile-time list — floors are generated ahead
 // of the camera and recycled once they scroll off the bottom).
-typedef enum { LEDGE_NORMAL, LEDGE_CRUMBLE, LEDGE_ICE, LEDGE_SUMMIT } LedgeType;
+// LEDGE_GONE: a crumbled ledge waiting to come back (not drawn solid, not
+// landable, never a rope target).
+typedef enum { LEDGE_NORMAL, LEDGE_CRUMBLE, LEDGE_ICE, LEDGE_SUMMIT, LEDGE_GONE } LedgeType;
 
 typedef struct {
   int16_t x, y, w;   // w == 0 means the slot is free
   uint8_t type;       // LedgeType
   int16_t crumble_ticks; // -1 = not yet landed on; counts down to 0 after landing
+                         // (LEDGE_GONE: counts down to its return)
 } Ledge;
 
 #define MAX_LEDGES 24
@@ -55,11 +58,12 @@ static int16_t s_ignore_ledge_idx = -1;
 
 #define SPECIAL_LEDGE_MIN_M 150 // crumble/ice ledges start appearing above this height
 #define CRUMBLE_TICKS 24        // 0.8s @ 30fps before a landed-on crumble ledge vanishes
+#define CRUMBLE_RESPAWN_TICKS 90 // ...and it is back 3 s later, so a lone crumbled floor can't strand you
 #define ICE_SLIDE_FP 384        // 1.5 px/tick in 8.8 fixed
 
 #define MIST_GAP_START 60      // px below climber's start the mist begins
-#define MIST_BASE_SPEED_FP 90  // 0.35 px/tick in 8.8 fixed
-#define MIST_MAX_SCALE_FP 878  // caps speed at 1.2 px/tick (878/256 ~= 3.43x)
+#define MIST_BASE_SPEED_FP 150 // 0.59 px/tick in 8.8 fixed
+#define MIST_MAX_SCALE_FP 450  // caps speed at ~1.03 px/tick (450/256 ~= 1.76x)
 
 #define MAX_GEMS 16
 typedef struct {
@@ -300,7 +304,7 @@ static uint8_t pick_ledge_type(int32_t world_y) {
 }
 
 static void maybe_spawn_gem(int16_t cx, int16_t ledge_y) {
-  if (rand() % 100 >= 55) return;
+  if (rand() % 100 >= 40) return;
   for (int i = 0; i < MAX_GEMS; i++) {
     if (!s_gems[i].active) {
       s_gems[i].active = true;
@@ -428,8 +432,8 @@ static void start_run(void) {
   place_on_ledge(&s_ledges[0]);
   s_standing_ledge_idx = 0;
   s_ignore_ledge_idx = -1;
-  // Down jacket: the mist starts 20 px further away per level.
-  s_mist_top_fp = (int32_t)(s_base_y + MIST_GAP_START + s_jacket * 20) << FP;
+  // Down jacket: the mist starts 30 px further away per level.
+  s_mist_top_fp = (int32_t)(s_base_y + MIST_GAP_START + s_jacket * 30) << FP;
 
   s_state = ST_PLAYING;
   stop_timer();
@@ -512,13 +516,15 @@ static void try_rope(void) {
   int idx = -1;
   if (s_last_ledge_idx >= 0) {
     const Ledge *l = &s_ledges[s_last_ledge_idx];
-    if (l->w != 0 && l->y == s_last_ledge_y && l->y < mist_y) idx = s_last_ledge_idx;
+    if (l->w != 0 && l->type != LEDGE_GONE && l->y == s_last_ledge_y && l->y < mist_y) {
+      idx = s_last_ledge_idx;
+    }
   }
   if (idx < 0) {
     int32_t feet_y = s_climber_y_fp >> FP;
     for (int i = 0; i < MAX_LEDGES; i++) {
       const Ledge *l = &s_ledges[i];
-      if (l->w == 0 || l->y < feet_y || l->y >= mist_y) continue;
+      if (l->w == 0 || l->type == LEDGE_GONE || l->y < feet_y || l->y >= mist_y) continue;
       if (idx < 0 || l->y < s_ledges[idx].y) idx = i;
     }
   }
@@ -582,7 +588,7 @@ static void game_tick(void *data) {
       int8_t land_dir = (s_vx_fp >= 0) ? 1 : -1;
       for (int i = 0; i < MAX_LEDGES; i++) {
         Ledge *l = &s_ledges[i];
-        if (l->w == 0 || i == s_ignore_ledge_idx) continue;
+        if (l->w == 0 || l->type == LEDGE_GONE || i == s_ignore_ledge_idx) continue;
         bool crossed = prev_feet_y <= l->y && feet_y >= l->y;
         bool over_ledge = (cx + CLIMBER_R >= l->x) && (cx - CLIMBER_R <= l->x + l->w);
         if (crossed && over_ledge) {
@@ -626,15 +632,24 @@ static void game_tick(void *data) {
     }
   }
 
-  // Crumble ledges: once landed on, they vanish CRUMBLE_TICKS later
-  // regardless of whether the climber is still standing there.
+  // Crumble ledges: once landed on, they vanish crumble_ticks() later
+  // regardless of whether the climber is still standing there, then come
+  // back CRUMBLE_RESPAWN_TICKS after that (fresh, as if never touched).
   for (int i = 0; i < MAX_LEDGES; i++) {
     Ledge *l = &s_ledges[i];
-    if (l->w == 0 || l->type != LEDGE_CRUMBLE || l->crumble_ticks < 0) continue;
-    l->crumble_ticks--;
-    if (l->crumble_ticks < 0) {
+    if (l->w == 0) continue;
+    if (l->type == LEDGE_GONE) {
+      if (--l->crumble_ticks < 0) {
+        l->type = LEDGE_CRUMBLE;
+        l->crumble_ticks = -1;
+      }
+      continue;
+    }
+    if (l->type != LEDGE_CRUMBLE || l->crumble_ticks < 0) continue;
+    if (--l->crumble_ticks < 0) {
       bool climber_here = !s_airborne && s_standing_ledge_idx == i;
-      l->w = 0;
+      l->type = LEDGE_GONE;
+      l->crumble_ticks = CRUMBLE_RESPAWN_TICKS;
       if (climber_here) knock_off(0);
     }
   }
@@ -659,7 +674,7 @@ static void game_tick(void *data) {
   if (s_rock_cooldown > 0) s_rock_cooldown--;
   if (s_height_m >= ROCK_MIN_M && s_rock_cooldown == 0) {
     int32_t chance = 1 + (s_height_m - ROCK_MIN_M) / 60;
-    if (chance > 6) chance = 6;
+    if (chance > 3) chance = 3;  // milestone 5: 6 -> 3, see tools/TUNING.md
     if ((int32_t)(rand() % 100) < chance) {
       for (int i = 0; i < MAX_ROCKS; i++) {
         if (!s_rocks[i].active) {
@@ -719,11 +734,11 @@ static void game_tick(void *data) {
   }
 
   // Mist: rises steadily, accelerating with height, and ends the run the
-  // instant it reaches the climber. The down jacket slows it 4% per level;
+  // instant it reaches the climber. The down jacket slows it 6% per level;
   // once the climber stands on the summit it stops rising.
-  int32_t scale_fp = 256 + (s_height_m * 26) / 100;
+  int32_t scale_fp = 256 + (s_height_m * 20) / 100;
   if (scale_fp > MIST_MAX_SCALE_FP) scale_fp = MIST_MAX_SCALE_FP;
-  int32_t mist_speed_fp = (MIST_BASE_SPEED_FP * scale_fp * (100 - 4 * s_jacket)) / (100 * 256);
+  int32_t mist_speed_fp = (MIST_BASE_SPEED_FP * scale_fp * (100 - 6 * s_jacket)) / (100 * 256);
   bool summit_reached = !s_airborne && s_standing_ledge_idx >= 0 &&
                         s_ledges[s_standing_ledge_idx].type == LEDGE_SUMMIT;
   if (!summit_reached) s_mist_top_fp -= mist_speed_fp;
@@ -866,6 +881,17 @@ static void draw_ledges(GContext *ctx) {
       int16_t sx = l->x;
       if (pass == 0) {
         if (l->type == LEDGE_SUMMIT) draw_summit_mass(ctx, l, sx, sy);
+        continue;
+      }
+      if (l->type == LEDGE_GONE) {
+        // A faint dotted ghost where the crumbled ledge will come back;
+        // it fills in (dots twice as dense) during the last half second.
+        int16_t step = l->crumble_ticks < 15 ? 2 : 4;
+        graphics_context_set_fill_color(ctx, l->crumble_ticks < 15 ? GColorWhite : GColorLightGray);
+        for (int16_t x = sx; x < sx + l->w; x += step) {
+          graphics_fill_rect(ctx, GRect(x, sy, 1, 1), 0, GCornerNone);
+          graphics_fill_rect(ctx, GRect(x, (int16_t)(sy + 7), 1, 1), 0, GCornerNone);
+        }
         continue;
       }
       if (l->type == LEDGE_CRUMBLE && l->crumble_ticks >= 0) {
