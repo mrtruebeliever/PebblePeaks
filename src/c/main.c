@@ -113,6 +113,7 @@ static int16_t s_flag_x, s_flag_y; // world coords of the pole's foot
 #define PK_ROPE 5
 #define PK_FOUND 6
 #define PK_AIM 7
+#define PK_SOUND 8
 
 #define MAX_LEVEL 5
 static const int32_t SHOP_COST[MAX_LEVEL] = {15, 40, 90, 160, 250};
@@ -158,6 +159,7 @@ static int16_t s_rope_hx, s_rope_hy;
 // the watch steers it.
 typedef enum { AIM_SWING, AIM_TILT } AimMode;
 static uint8_t s_aim_mode = AIM_SWING;
+static int8_t s_sound_vol = 1;  // 0=Off 1=Soft 2=Normal 3=Loud (pause screen, DOWN)
 static bool s_aiming;
 static bool s_accel_on;
 static int32_t s_aim_angle;
@@ -234,6 +236,7 @@ enum {
   S_DESC_GRIP, S_DESC_JACKET, S_DESC_ROPE, S_SHOP_HINT, S_SUMMIT_NEAR, S_MAX,
   S_PAUSED, S_HINT_RESUME, S_HINT_QUIT, S_AIM_HINT,
   S_AIM_HINT_SWING, S_AIM_MODE, S_AIM_TILT, S_AIM_SWING,
+  S_SOUND_MODE, S_SND_OFF, S_SND_SOFT, S_SND_NORMAL, S_SND_LOUD, S_SND_MUTED,
   NUM_STRS
 };
 
@@ -248,6 +251,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "Paused", "SELECT · resume", "BACK · quit",
     "Tilt to aim · SELECT fires",
     "Wait for it · SELECT fires", "UP · aim: %s", "tilt", "swing",
+    "DOWN · sound: %s", "off", "soft", "normal", "loud", "muted",
   },
   [L_NL] = {
     "SELECT · klimmen", "OMLAAG · winkel", "Record: %ldm",
@@ -259,6 +263,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "Pauze", "SELECT · verder", "TERUG · stoppen",
     "Kantel om te richten · SELECT",
     "Wacht op het moment · SELECT", "OMHOOG · richten: %s", "kantelen", "slinger",
+    "OMLAAG · geluid: %s", "uit", "zacht", "normaal", "luid", "gedempt",
   },
   [L_FR] = {
     "SELECT · grimper", "BAS · boutique", "Record : %ldm",
@@ -270,6 +275,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "Pause", "SELECT · reprendre", "RETOUR · quitter",
     "Inclinez pour viser · SELECT",
     "Au bon moment · SELECT", "HAUT · visée : %s", "inclinaison", "balancier",
+    "BAS · son : %s", "coupé", "doux", "normal", "fort", "muet",
   },
   [L_DE] = {
     "SELECT · klettern", "RUNTER · Laden", "Rekord: %ldm",
@@ -281,6 +287,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "Pausiert", "SELECT · weiter", "ZURÜCK · beenden",
     "Kippen zum Zielen · SELECT",
     "Im richtigen Moment · SELECT", "RAUF · Zielen: %s", "Kippen", "Pendel",
+    "RUNTER · Ton: %s", "aus", "leise", "normal", "laut", "stumm",
   },
   [L_ES] = {
     "SELECT · escalar", "ABAJO · tienda", "Récord: %ldm",
@@ -292,6 +299,7 @@ static const char *TR[NUM_LANGS][NUM_STRS] = {
     "Pausa", "SELECT · seguir", "ATRÁS · salir",
     "Inclina para apuntar · SELECT",
     "En el momento justo · SELECT", "ARRIBA · apuntar: %s", "inclinar", "péndulo",
+    "ABAJO · sonido: %s", "no", "suave", "normal", "alto", "silenciado",
   },
 };
 
@@ -354,6 +362,7 @@ static void save_progress(void) {
   persist_write_int(PK_ROPE, s_rope);
   persist_write_bool(PK_FOUND, s_found);
   persist_write_int(PK_AIM, s_aim_mode);
+  persist_write_int(PK_SOUND, s_sound_vol);
 }
 
 static void load_progress(void) {
@@ -364,6 +373,8 @@ static void load_progress(void) {
   s_rope = (int8_t)persist_read_int(PK_ROPE);
   s_found = persist_read_bool(PK_FOUND);
   if (persist_exists(PK_AIM)) s_aim_mode = (uint8_t)persist_read_int(PK_AIM);
+  if (persist_exists(PK_SOUND)) s_sound_vol = (int8_t)persist_read_int(PK_SOUND);
+  if (s_sound_vol < 0 || s_sound_vol > 3) s_sound_vol = 1;
 }
 
 // Grip soles: less ice slide (1.5 -> 0.4 px/tick) and crumble ledges hold
@@ -510,6 +521,135 @@ static void recycle_offscreen_ledges(void) {
 }
 
 // ---------------------------------------------------------------------------
+// Sound effects (Time 2 speaker): early-90s console chip sounds, square and
+// triangle voices with a sine for sparkle, all gated by the Sound setting.
+// Pitches stay at A4 (440 Hz) and up: a watch speaker barely moves air below
+// ~400 Hz. MIDI notes: 60 = C4, 69 = A4. A note has no envelope, so fades are
+// the same note repeated at falling velocity.
+//
+// PEAKS_MUTE=1 pebble build makes a build that never touches the speaker:
+// the emulator's QEMU has none, and the app would exit on the first note.
+// ---------------------------------------------------------------------------
+#define SFX_VOL 80
+#define SFX_N(a) (sizeof(a) / sizeof((a)[0]))
+#define SI  SpeakerWaveformSine
+#define SQ  SpeakerWaveformSquare
+#define TR_ SpeakerWaveformTriangle
+#define SAW SpeakerWaveformSawtooth
+#define REST(ms) {0, SI, ms, 0, 0}
+#define TRACK(notes) { notes, SFX_N(notes), NULL }
+
+// Jump: a quick rising blip.
+static const SpeakerNote SND_JUMP[] = {{72, SQ, 25, 70, 0}, {79, SQ, 35, 60, 0}};
+// Landing: a soft tick.
+static const SpeakerNote SND_LAND[] = {{69, TR_, 30, 60, 0}};
+// Gem: the classic two-note coin.
+static const SpeakerNote SND_GEM[] = {{83, SQ, 45, 90, 0}, {88, SQ, 90, 90, 0}, {88, SQ, 120, 35, 0}};
+// Rope coil: a rising arpeggio.
+static const SpeakerNote SND_COIL[] = {{76, TR_, 40, 100, 0}, {79, TR_, 40, 100, 0},
+                                       {84, TR_, 40, 100, 0}, {88, TR_, 110, 90, 0}};
+// Hook thrown: a whistling upward zip.
+static const SpeakerNote SND_THROW[] = {{84, SI, 18, 70, 0}, {88, SI, 18, 70, 0}, {91, SI, 18, 70, 0},
+                                        {96, SI, 18, 60, 0}, {100, SI, 25, 45, 0}};
+// Hook catches: metal on rock, two squares a semitone apart beating.
+static const SpeakerNote SND_CLANK_A[] = {{88, SQ, 40, 110, 0}, {88, SQ, 60, 55, 0}, {88, SQ, 80, 20, 0}};
+static const SpeakerNote SND_CLANK_B[] = {{89, SQ, 40, 90, 0}, {89, SQ, 60, 45, 0}, {89, SQ, 80, 15, 0}};
+// Missed shot: the hook falls back.
+static const SpeakerNote SND_MISS[] = {{79, TR_, 60, 90, 0}, {74, TR_, 60, 80, 0}, {69, TR_, 110, 70, 0}};
+// One pull up the rope.
+static const SpeakerNote SND_PULL[] = {{91, TR_, 14, 35, 0}};
+// Raising the hook to aim.
+static const SpeakerNote SND_AIM[] = {{96, SQ, 12, 40, 0}};
+// Hit by a rock: a harsh drop.
+static const SpeakerNote SND_HIT[] = {{72, SAW, 50, 120, 0}, {67, SAW, 60, 110, 0}, {64, SAW, 90, 80, 0}};
+// A crumble ledge starts to give: crackle.
+static const SpeakerNote SND_CRACK[] = {{74, SQ, 18, 70, 0}, REST(22), {71, SQ, 18, 60, 0}, REST(30),
+                                        {73, SQ, 14, 45, 0}};
+// Slid off the ice or dropped with a crumbling ledge: a falling whistle.
+static const SpeakerNote SND_FALL[] = {{88, SI, 45, 90, 0}, {84, SI, 45, 85, 0}, {81, SI, 45, 80, 0},
+                                       {76, SI, 45, 70, 0}, {72, SI, 80, 55, 0}};
+// The mist is close: a soft double beep, repeated while the gauge is red.
+static const SpeakerNote SND_DANGER[] = {{81, TR_, 50, 90, 0}, REST(60), {81, TR_, 50, 90, 0}};
+// Frozen: a slow falling line with a cold shimmer on top.
+static const SpeakerNote SND_FROZEN_A[] = {{79, TR_, 180, 110, 0}, {76, TR_, 180, 100, 0},
+                                           {72, TR_, 180, 90, 0}, {69, TR_, 300, 80, 0},
+                                           {69, TR_, 200, 30, 0}};
+static const SpeakerNote SND_FROZEN_B[] = {REST(120), {96, SI, 60, 40, 0}, REST(200), {93, SI, 60, 35, 0},
+                                           REST(200), {91, SI, 60, 30, 0}};
+// New height record (instead of the frozen line): a bright climb.
+static const SpeakerNote SND_RECORD_A[] = {{72, SQ, 80, 90, 0}, {76, SQ, 80, 90, 0}, {79, SQ, 80, 90, 0},
+                                           {84, SQ, 260, 100, 0}, {84, SQ, 200, 35, 0}};
+static const SpeakerNote SND_RECORD_B[] = {REST(240), {88, SI, 80, 50, 0}, {91, SI, 260, 45, 0}};
+// The summit: a fanfare, melody, harmony and a sparkle on top.
+static const SpeakerNote SND_WIN_A[] = {{72, SQ, 110, 100, 0}, {72, SQ, 110, 100, 0}, {72, SQ, 110, 100, 0},
+                                        {79, SQ, 330, 110, 0}, {76, SQ, 110, 100, 0}, {79, SQ, 110, 100, 0},
+                                        {84, SQ, 500, 110, 0}, {84, SQ, 300, 40, 0}};
+static const SpeakerNote SND_WIN_B[] = {{69, TR_, 110, 90, 0}, {69, TR_, 110, 90, 0}, {69, TR_, 110, 90, 0},
+                                        {76, TR_, 330, 90, 0}, {72, TR_, 110, 80, 0}, {76, TR_, 110, 80, 0},
+                                        {79, TR_, 600, 90, 0}};
+static const SpeakerNote SND_WIN_C[] = {REST(880), {96, SI, 40, 60, 0}, REST(60), {100, SI, 40, 55, 0},
+                                        REST(60), {103, SI, 40, 50, 0}, REST(80), {108, SI, 90, 45, 0}};
+// Shop: buy and refuse. Run start: a ready-go chirp.
+static const SpeakerNote SND_BUY[]  = {{79, TR_, 60, 100, 0}, {84, TR_, 130, 100, 0}};
+static const SpeakerNote SND_DENY[] = {{71, SQ, 90, 90, 0}, {67, SQ, 150, 80, 0}};
+static const SpeakerNote SND_START[] = {{79, SQ, 50, 80, 0}, {84, SQ, 90, 80, 0}};
+
+// Master volume per Sound setting (Off/Soft/Normal/Loud). Each effect keeps
+// its own tuned loudness; sv() scales it, so Loud is the tables as written.
+static const uint8_t SND_VOL[4] = {0, 35, 70, 100};
+static uint8_t sv(uint8_t base) { return (uint8_t)((uint16_t)base * SND_VOL[s_sound_vol & 3] / 100); }
+
+// Quiet Time and the watch's own mute (Settings > Sounds & Haptics) win
+// over the in-game Sound level.
+static bool sfx_enabled(void) {
+#ifdef PEAKS_MUTE
+  return false;
+#else
+  return s_sound_vol && !quiet_time_is_active() && !speaker_is_muted();
+#endif
+}
+
+static void sfx_play(const SpeakerNote *n, uint32_t c) {
+  if (sfx_enabled()) speaker_play_notes(n, c, sv(SFX_VOL));
+}
+static void sfx_tracks(const SpeakerTrack *t, uint32_t c) {
+  if (sfx_enabled()) speaker_play_tracks(t, c, sv(SFX_VOL));
+}
+
+#define SFX(name, notes) static void name(void) { sfx_play(notes, SFX_N(notes)); }
+SFX(sfx_jump, SND_JUMP)
+SFX(sfx_land, SND_LAND)
+SFX(sfx_gem, SND_GEM)
+SFX(sfx_coil, SND_COIL)
+SFX(sfx_throw, SND_THROW)
+SFX(sfx_miss, SND_MISS)
+SFX(sfx_pull, SND_PULL)
+SFX(sfx_aim, SND_AIM)
+SFX(sfx_hit, SND_HIT)
+SFX(sfx_crack, SND_CRACK)
+SFX(sfx_fall, SND_FALL)
+SFX(sfx_danger, SND_DANGER)
+SFX(sfx_buy, SND_BUY)
+SFX(sfx_deny, SND_DENY)
+SFX(sfx_start, SND_START)
+#undef SFX
+
+static void sfx_clank(void) {
+  static const SpeakerTrack t[] = { TRACK(SND_CLANK_A), TRACK(SND_CLANK_B) };
+  sfx_tracks(t, SFX_N(t));
+}
+static void sfx_frozen(bool record) {
+  static const SpeakerTrack lost[] = { TRACK(SND_FROZEN_A), TRACK(SND_FROZEN_B) };
+  static const SpeakerTrack best[] = { TRACK(SND_RECORD_A), TRACK(SND_RECORD_B) };
+  if (record) sfx_tracks(best, SFX_N(best));
+  else sfx_tracks(lost, SFX_N(lost));
+}
+static void sfx_win(void) {
+  static const SpeakerTrack t[] = { TRACK(SND_WIN_A), TRACK(SND_WIN_B), TRACK(SND_WIN_C) };
+  sfx_tracks(t, SFX_N(t));
+}
+
+// ---------------------------------------------------------------------------
 // Run lifecycle
 // ---------------------------------------------------------------------------
 
@@ -556,6 +696,7 @@ static void start_run(void) {
   s_state = ST_PLAYING;
   stop_timer();
   s_timer = app_timer_register(TICK_MS, game_tick, NULL);
+  sfx_start();
   layer_mark_dirty(s_layer);
 }
 
@@ -593,6 +734,7 @@ static void end_run_locked(GameState state) {
 static void trigger_game_over(void) {
   end_run_locked(ST_GAMEOVER);
   vibes_long_pulse();
+  sfx_frozen(s_new_record);
 }
 
 static void trigger_victory(void) {
@@ -600,6 +742,7 @@ static void trigger_victory(void) {
   s_best_height_m = SUMMIT_M;
   end_run_locked(ST_VICTORY);
   vibes_double_pulse();
+  sfx_win();
 }
 
 static void knock_off(int32_t vx_fp) {
@@ -629,6 +772,7 @@ static void try_jump(int8_t dir) {
   s_ignore_ledge_idx = -1;
   s_vx_fp = (int32_t)dir * JUMP_VX_FP;
   s_vy_fp = JUMP_VY0_FP;
+  sfx_jump();
   layer_mark_dirty(s_layer);
 }
 
@@ -678,6 +822,7 @@ static void begin_rope(int idx, int16_t x) {
   s_vy_fp = 0;
   s_tumbling = false;
   vibes_short_pulse();
+  sfx_throw();
   layer_mark_dirty(s_layer);
 }
 
@@ -696,6 +841,7 @@ static void start_aim(void) {
     accel_data_service_subscribe(0, NULL);  // just for accel_service_peek
     s_accel_on = true;
   }
+  sfx_aim();
   layer_mark_dirty(s_layer);
 }
 
@@ -749,6 +895,7 @@ static void fire_aimed_rope(void) {
   s_hook_dist = cheb_dist(x - (s_climber_x_fp >> FP), hand_y() - y);
   s_hook_len = 0;
   vibes_short_pulse();
+  sfx_throw();
   layer_mark_dirty(s_layer);
 }
 
@@ -804,7 +951,10 @@ static void try_rope(void) {
 // The climber stays on their ledge, so the world goes on around them.
 static void hook_miss_step(void) {
   s_hook_len += HOOK_SPEED;
-  if (s_hook_len >= 2 * s_hook_dist) s_rope_phase = ROPE_IDLE;
+  if (s_hook_len >= 2 * s_hook_dist) {
+    s_rope_phase = ROPE_IDLE;
+    sfx_miss();
+  }
 }
 
 // One tick of a rescue in progress. Gravity is off while the hook flies and
@@ -819,7 +969,10 @@ static void rope_step(void) {
   }
   if (s_rope_phase == ROPE_SHOOT) {
     s_hook_len += HOOK_SPEED;
-    if (s_hook_len >= s_hook_dist) s_rope_phase = ROPE_CLIMB;
+    if (s_hook_len >= s_hook_dist) {
+      s_rope_phase = ROPE_CLIMB;
+      sfx_clank();
+    }
     return;
   }
   // First the climber goes up the rope, leaning along it, until the top
@@ -836,7 +989,11 @@ static void rope_step(void) {
   if (left > ROPE_CLIMB_SPEED) {
     s_climber_x_fp += (dx * ROPE_CLIMB_SPEED << FP) / left;
     s_climber_y_fp += (dy * ROPE_CLIMB_SPEED << FP) / left;
-    if (!s_rope_mantle) s_rope_climbed += ROPE_CLIMB_SPEED;
+    if (!s_rope_mantle) {
+      int16_t stroke = s_rope_climbed / ROPE_STROKE;
+      s_rope_climbed += ROPE_CLIMB_SPEED;
+      if (s_rope_climbed / ROPE_STROKE != stroke) sfx_pull();
+    }
     return;
   }
   if (!s_rope_mantle) {
@@ -853,6 +1010,8 @@ static void rope_step(void) {
   s_land_ticks = LAND_TICKS;
   if (l->type == LEDGE_ICE) s_ice_dir = s_facing;
   else if (l->type == LEDGE_CRUMBLE && l->crumble_ticks < 0) l->crumble_ticks = crumble_ticks();
+  if (l->type == LEDGE_CRUMBLE) sfx_crack();
+  else sfx_land();
 }
 
 static void game_tick(void *data) {
@@ -918,6 +1077,8 @@ static void game_tick(void *data) {
           } else if (l->type == LEDGE_CRUMBLE && l->crumble_ticks < 0) {
             l->crumble_ticks = crumble_ticks();
           }
+          if (l->type == LEDGE_CRUMBLE) sfx_crack();
+          else sfx_land();
           break;
         }
       }
@@ -935,6 +1096,7 @@ static void game_tick(void *data) {
       // overhangs the near edge slides onto the ice instead of off it.
       if ((s_ice_dir < 0 && cx2 < sl->x) || (s_ice_dir > 0 && cx2 > sl->x + sl->w)) {
         knock_off(s_ice_dir * 100);
+        sfx_fall();
       }
     } else if (sl->w != 0 && sl->type == LEDGE_SUMMIT) {
       // On the top: walk over to the flag and grab it.
@@ -967,7 +1129,10 @@ static void game_tick(void *data) {
       bool climber_here = !s_airborne && s_standing_ledge_idx == i;
       l->type = LEDGE_GONE;
       l->crumble_ticks = CRUMBLE_RESPAWN_TICKS;
-      if (climber_here) knock_off(0);
+      if (climber_here) {
+        knock_off(0);
+        sfx_fall();
+      }
     }
   }
 
@@ -1023,6 +1188,7 @@ static void game_tick(void *data) {
         r->active = false;
         s_invuln_ticks = 45;
         vibes_short_pulse();
+        sfx_hit();
         knock_off(0);
       }
     }
@@ -1042,9 +1208,11 @@ static void game_tick(void *data) {
       if (g->rope) {
         if (s_rope_left < ROPE_CARRY_MAX) s_rope_left++;
         s_rope_flash = 12;
+        sfx_coil();
       } else {
         s_gems_run++;
         s_gem_flash = 8;
+        sfx_gem();
       }
       // Reuse the oldest sparkle slot if all are busy.
       int slot = 0;
@@ -1071,6 +1239,8 @@ static void game_tick(void *data) {
     trigger_game_over();
     return;
   }
+  // Same red line as the HUD gauge: beep every 1.3 s while the mist is close.
+  if ((s_mist_top_fp >> FP) - (s_climber_y_fp >> FP) < 30 && s_anim % 40 == 0) sfx_danger();
 
   layer_mark_dirty(s_layer);
 }
@@ -1961,7 +2131,7 @@ static void layer_update(Layer *layer, GContext *ctx) {
       break;
     case ST_PAUSED:
       draw_game(ctx, b);
-      fill(ctx, GColorBlack, 0, b.size.h / 2 - 30, b.size.w, 80);
+      fill(ctx, GColorBlack, 0, b.size.h / 2 - 30, b.size.w, 96);
       draw_center_text(ctx, S(S_PAUSED), s_f28b, b.size.h / 2 - 28, 30, b, GColorWhite);
       draw_center_text(ctx, S(S_HINT_RESUME), s_f14, b.size.h / 2 + 2, 18, b, GColorWhite);
       draw_center_text(ctx, S(S_HINT_QUIT), s_f14, b.size.h / 2 + 16, 18, b, GColorLightGray);
@@ -1970,6 +2140,10 @@ static void layer_update(Layer *layer, GContext *ctx) {
         snprintf(buf, sizeof(buf), S(S_AIM_MODE),
                  S(s_aim_mode == AIM_TILT ? S_AIM_TILT : S_AIM_SWING));
         draw_center_text(ctx, buf, s_f14, b.size.h / 2 + 30, 18, b, GColorChromeYellow);
+        int snd = s_sound_vol == 0 ? S_SND_OFF : speaker_is_muted() ? S_SND_MUTED
+                : S_SND_OFF + s_sound_vol;
+        snprintf(buf, sizeof(buf), S(S_SOUND_MODE), S(snd));
+        draw_center_text(ctx, buf, s_f14, b.size.h / 2 + 46, 18, b, GColorChromeYellow);
       }
       break;
     case ST_GAMEOVER:
@@ -2010,6 +2184,7 @@ static void try_buy(void) {
     if (s_flash_timer) app_timer_cancel(s_flash_timer);
     s_flash_timer = app_timer_register(600, shop_flash_end, NULL);
     vibes_double_pulse();
+    sfx_deny();
     layer_mark_dirty(s_layer);
     return;
   }
@@ -2017,6 +2192,7 @@ static void try_buy(void) {
   (*lvl[(int)s_shop_sel])++;
   save_progress();
   vibes_short_pulse();
+  sfx_buy();
   layer_mark_dirty(s_layer);
 }
 
@@ -2060,6 +2236,12 @@ static void down_click(ClickRecognizerRef rec, void *ctx) {
   switch (s_state) {
     case ST_TITLE: open_shop(); break;
     case ST_PLAYING: stop_aim(); try_jump(1); break;
+    case ST_PAUSED:  // cycle the sound level, with a sample at the new one
+      s_sound_vol = (int8_t)((s_sound_vol + 1) % 4);
+      persist_write_int(PK_SOUND, s_sound_vol);
+      sfx_gem();
+      layer_mark_dirty(s_layer);
+      break;
     case ST_SHOP:
       if (s_shop_sel < 2) {
         s_shop_sel++;

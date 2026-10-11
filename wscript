@@ -3,6 +3,7 @@
 #
 # Feel free to customize this to your needs.
 #
+import os
 import os.path
 
 top = '.'
@@ -21,6 +22,14 @@ def configure(ctx):
     Universal configuration: add your change prior to calling ctx.load('pebble_sdk').
     """
     ctx.load('pebble_sdk')
+
+    # PEAKS_MUTE=1 pebble build -> a build that never touches the speaker.
+    # The emulator's QEMU has no speaker at all, and the app would exit on the
+    # first sound it plays. Reconfigure (or plain `pebble build`) to undo.
+    for flag in ('PEAKS_MUTE',):
+        if os.environ.get(flag):
+            for env in ctx.all_envs.values():
+                env.append_value('DEFINES', flag)
 
 
 def build(ctx):

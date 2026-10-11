@@ -39,6 +39,12 @@ Drie upgrades, elk 5 niveaus, kosten 15/40/90/160/250 edelstenen:
     er altijd weer af kunt haken. Mis je, dan ben je het touw kwijt.
   - Losse touwrollen (zeldzaam) geven +1 touw, tot 9 tegelijk.
 
+## Instellingen (pauzescherm, TERUG tijdens het klimmen)
+
+- **OMHOOG:** richtstijl, slinger of kantelen.
+- **OMLAAG:** geluid, uit/zacht/normaal/luid. Quiet Time en de mute van het
+  horloge gaan altijd voor.
+
 ## Talen
 
 De app volgt de taal van het horloge: Engels (standaard), Nederlands, Frans,
@@ -53,6 +59,9 @@ Duits en Spaans. De vertaaltabel staat bovenin `src/c/main.c`.
 - `tools/gen_icon.py`, `tools/gen_marketing.py`: menu-icoon en store-art.
 - `tools/release.py`: bouwt `build/PebblePeaks-release.pbw` voor de store.
 - `tools/press.py`: knoppen in de emulator drukken.
+- **Emulator:** bouw met `PEAKS_MUTE=1 pebble build`. De emulator heeft geen
+  speaker en de app stopt dan bij het eerste geluid. Een gewone
+  `pebble build` maakt weer de versie met geluid (voor het horloge en de store).
 
 Zie [`plan.md`](plan.md) voor het ontwerp en [`COMMON.md`](COMMON.md) voor de
 gedeelde projectconventies.

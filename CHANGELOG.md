@@ -22,7 +22,16 @@
 - **The summit.** At 1000 m the mountain ends in a flag. Reach it with full
   gear, walk over and grab it; the flag then stands beside your climber on
   the title screen.
-- **16-bit look.** Pixel-art climber with jump, fall and landing poses,
-  sparkling gems, tumbling boulders and a sky that darkens to stars.
+- **16-bit look.** Pixel-art climber with jump, fall, landing and rope
+  climbing poses, sparkling gems and tumbling boulders, over a parallax
+  background: a pine valley and snowy ranges that sink away below, drifting
+  clouds, and a sky that runs from day through sunset to a starry night with
+  an aurora near the summit.
+- **Chip sounds.** Jumps, landings, gems, the hook's throw and clank, rocks,
+  crackling ledges, a mist warning and jingles for a record and the summit,
+  on the Time 2 speaker. Sound level Off/Soft/Normal/Loud on the pause
+  screen (DOWN); Quiet Time and the watch's mute always win.
+- **Tinted backlight.** While the light is on it takes the sky's colour,
+  pulses red when the mist is close, and glows gold on the summit.
 - **Five languages:** English, Nederlands, Français, Deutsch, Español,
   following the watch's language.
