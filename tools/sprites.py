@@ -32,6 +32,14 @@ PALETTE = {
     "g": ("GColorGreen", (0x00, 0xFF, 0x00)),
     "N": ("GColorWindsorTan", (0xAA, 0x55, 0x00)),
     "n": ("GColorBulgarianRose", (0x55, 0x00, 0x00)),
+    "M": ("GColorMagenta", (0xFF, 0x00, 0xFF)),
+    "m": ("GColorPurple", (0xAA, 0x00, 0xAA)),
+    "Z": ("GColorShockingPink", (0xFF, 0x55, 0xFF)),
+    "z": ("GColorFashionMagenta", (0xFF, 0x00, 0xAA)),
+    "E": ("GColorMediumSpringGreen", (0x00, 0xFF, 0xAA)),
+    "e": ("GColorJaegerGreen", (0x00, 0xAA, 0x55)),
+    "q": ("GColorBrilliantRose", (0xFF, 0x55, 0xAA)),
+    "T": ("GColorMintGreen", (0xAA, 0xFF, 0xAA)),
 }
 
 # Head shared by every climber pose: beanie with pompom and white band,
@@ -179,14 +187,194 @@ FLAG = {
     ],
 }
 
-ALL = {**FRAMES, **FLAG}
+# ---------------------------------------------------------------------------
+# Extra sprites (any width; every row of a sprite must have equal length).
+# Gems are drawn from a template: W white glint, 1 light, 2 mid, 3 dark facet.
+# ---------------------------------------------------------------------------
+GEM_TEMPLATE = [
+    "..KKKKK..",
+    ".KWW122K.",
+    "KW122233K",
+    "K1122233K",
+    ".K12223K.",
+    ".K12233K.",
+    "..K123K..",
+    "..K223K..",
+    "...K3K...",
+    "....K....",
+]
+GEM_SMALL_TEMPLATE = [
+    ".KKKKK.",
+    "KW1223K",
+    "K12233K",
+    ".K123K.",
+    "..K23K.",
+    "...K...",
+]
+
+
+def tint(rows, light, mid, dark):
+    t = {"1": light, "2": mid, "3": dark}
+    return ["".join(t.get(c, c) for c in r) for r in rows]
+
+
+def rotate90(rows):
+    return ["".join(rows[len(rows) - 1 - y][x] for y in range(len(rows)))
+            for x in range(len(rows[0]))]
+
+
+ROCK0 = [
+    "...KKKKK...",
+    ".KKLLWWLKK.",
+    "KLLWWLLLLDK",
+    "KLWLLLLDLDK",
+    "KLLLLDDLLDK",
+    "KLLLDLLLDDK",
+    "KLLDDLLLLDK",
+    "KLLLLLLDDDK",
+    ".KDLLDDDDK.",
+    ".KKDDDDDKK.",
+    "...KKKKK...",
+]
+# Second frame: same boulder turned a quarter, highlight swung to the other side.
+ROCK1 = [
+    "...KKKKK...",
+    ".KKLLLLLKK.",
+    "KLLWLLLLLDK",
+    "KLWWLLLDDDK",
+    "KLLLLLLDLDK",
+    "KLLDDLLLLDK",
+    "KLLLDLLLLDK",
+    "KLLLLDLLDDK",
+    ".KDDLLLDDDK",
+    ".KKDDDDDKK.",
+    "...KKKKK...",
+]
+
+ICON_BOOT = [
+    "................",
+    "..KKKKKKK.......",
+    ".KLWWLWWLK......",
+    ".KLLLLLLLK......",
+    ".KKKKKKKKK......",
+    ".KNSNNNNnK......",
+    ".KNSNNNWnK......",
+    ".KNSNNNnnK......",
+    ".KNNNNNWnKKKK...",
+    ".KNNNNNNNNNNKK..",
+    ".KNSNNNNNNNNNnK.",
+    ".KNNNNNNNNNNnnK.",
+    "KKKKKKKKKKKKKKK.",
+    "KDLDDLDDLDDLDDK.",
+    "KLKKDLKKDLKKDLKK",
+    ".K.K.K.K.K.K.K.K",
+]
+
+ICON_JACKET = [
+    ".....KKKKKK.....",
+    "...KKLWWWWLKK...",
+    "..KRRKKLLKKRRK..",
+    ".KoRRRRLLRRRRrK.",
+    "KoRRRRKLLKRRRRrK",
+    "KRRRRRKLLKRRRRrK",
+    "KrrrrrKLLKrrrrrK",
+    "KoRRRRKLLKRRRRrK",
+    "KRRRRRKLLKRRRRrK",
+    "KrrrrrKLLKrrrrrK",
+    "KoRRRRKLLKRRRRrK",
+    "KRRRRRKLLKRRRRrK",
+    "KrrrrrKLLKrrrrrK",
+    ".KKKKKKLLKKKKKK.",
+    ".KRRRRRKKRRRRRK.",
+    "..KKKKKKKKKKKK..",
+]
+
+
+def rope_icon():
+    """Rope coil (procedural torus, diagonal strands) with a carabiner on top."""
+    W = H = 16
+    cx, cy, ro, ri = 6.5, 9.5, 6.4, 2.6
+    grid = [["."] * W for _ in range(H)]
+    ring = set()
+    for y in range(H):
+        for x in range(W):
+            d = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+            if ri <= d <= ro:
+                ring.add((x, y))
+    for (x, y) in ring:
+        d = ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5
+        c = "ySyNy"[(x + y) % 5] if (x + y) % 5 else "N"
+        c = "Y" if (x + y) % 4 == 0 else ("y" if (x + y) % 4 in (1, 2) else "N")
+        if (x - cx) + (y - cy) > 2:       # lower-right half in shade
+            c = "N" if (x + y) % 4 else "n"
+        grid[y][x] = c
+    for y in range(H):
+        for x in range(W):
+            if grid[y][x] == ".":
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    if (x + dx, y + dy) in ring:
+                        grid[y][x] = "K"
+    for y in range(H):
+        for x in range(W):
+            if grid[y][x] == "." and ((x - cx) ** 2 + (y - cy) ** 2) ** 0.5 < ri:
+                grid[y][x] = "K"
+    carab = [
+        ".KKKK.",
+        "KWLLDK",
+        "KLKKLK",
+        "KLKKDK",
+        "KLKKDK",
+        "KLK.DK",
+        "KDLLDK",
+        ".KKKK.",
+    ]
+    for dy, r in enumerate(carab):
+        for dx, ch in enumerate(r):
+            if ch != ".":
+                grid[dy][10 + dx] = ch
+    return ["".join(r) for r in grid]
+
+
+ICON_ROPE = rope_icon()
+
+EXTRA = {
+    "GEM_M": tint(GEM_TEMPLATE, "Z", "M", "m"),
+    "GEM_G": tint(GEM_TEMPLATE, "T", "E", "e"),
+    "GEM_Y": tint(GEM_TEMPLATE, "Y", "y", "N"),
+    "GEM_P": tint(GEM_TEMPLATE, "q", "z", "r"),
+    "GEM_SPARKLE": [
+        "..W..",
+        "..W..",
+        "WWWWW",
+        "..W..",
+        "..W..",
+    ],
+    "GEM_S": tint(GEM_SMALL_TEMPLATE, "Z", "M", "m"),
+    "ICON_BOOT": ICON_BOOT,
+    "ICON_JACKET": ICON_JACKET,
+    "ICON_ROPE": ICON_ROPE,
+    "ICON_ROPE_S": [
+        ".KKKKK.",
+        "KYYyyyK",
+        "KYKKKNK",
+        "KyKKKNK",
+        "KyyNNNK",
+        ".KKKKK.",
+        "..KK...",
+    ],
+    "ROCK0": ROCK0,
+    "ROCK1": ROCK1,
+}
+
+ALL = {**FRAMES, **FLAG, **EXTRA}
 
 
 def check():
     for name, rows in ALL.items():
         for i, row in enumerate(rows):
-            if len(row) != 16:
-                sys.exit("%s row %d is %d wide: %r" % (name, i, len(row), row))
+            if len(row) != len(rows[0]):
+                sys.exit("%s row %d is %d wide, expected %d: %r"
+                         % (name, i, len(row), len(rows[0]), row))
             for ch in row:
                 if ch != "." and ch not in PALETTE:
                     sys.exit("%s row %d: unknown colour %r" % (name, i, ch))
@@ -234,33 +422,51 @@ def write_header(path):
         for y, x, n, c in rs:
             lines.append("  {%d, %d, %d, %d}," % (y, x, n, c))
         lines.append("};")
-        lines.append("static const Sprite SPR_%s = { RUNS_%s, %d, 16, %d };"
-                     % (name, name, len(rs), len(rows)))
+        lines.append("static const Sprite SPR_%s = { RUNS_%s, %d, %d, %d };"
+                     % (name, name, len(rs), len(rows[0]), len(rows)))
         lines.append("")
     with open(path, "w") as f:
         f.write("\n".join(lines))
 
 
-def preview(path, scale=6):
+def preview(path, scale=6, names=None):
+    """Sheet of sprites on light-blue sky and dark Oxford blue, plus a 1x strip."""
     from PIL import Image, ImageDraw
-    names = list(ALL)
-    h = max(len(r) for r in ALL.values())
-    img = Image.new("RGB", ((16 * 2 + 2) * len(names) * scale // 2 + 8, (h + 2) * scale * 2),
+    names = names or list(ALL)
+    per_row = 9
+    groups = [names[i:i + per_row] for i in range(0, len(names), per_row)]
+    cell_w = 18 * scale
+    cell_h = (max(len(r) for r in ALL.values()) + 2) * scale
+    img = Image.new("RGB", (cell_w * per_row + 8, cell_h * len(groups) * 2 + 40),
                     (0x00, 0xAA, 0xFF))
     d = ImageDraw.Draw(img)
-    for row_i, bg in enumerate([(0x00, 0xAA, 0xFF), (0x00, 0x00, 0x55)]):
-        oy = row_i * (h + 2) * scale
-        d.rectangle([0, oy, img.width, oy + (h + 2) * scale], fill=bg)
-        for i, name in enumerate(names):
+    for bi, bg in enumerate([(0x00, 0xAA, 0xFF), (0x00, 0x00, 0x55)]):
+        for gi, grp in enumerate(groups):
+            oy = (bi * len(groups) + gi) * cell_h
+            d.rectangle([0, oy, img.width, oy + cell_h], fill=bg)
+            for i, name in enumerate(grp):
+                rows = ALL[name]
+                ox = 4 + i * cell_w
+                top = oy + cell_h - scale - len(rows) * scale
+                for y, row in enumerate(rows):
+                    for x, ch in enumerate(row):
+                        if ch != ".":
+                            d.rectangle([ox + x * scale, top + y * scale,
+                                         ox + (x + 1) * scale - 1,
+                                         top + (y + 1) * scale - 1],
+                                        fill=PALETTE[ch][1])
+    # 1:1 strips (what the watch shows) on both backgrounds.
+    sy = cell_h * len(groups) * 2
+    for bi, bg in enumerate([(0x00, 0xAA, 0xFF), (0x00, 0x00, 0x55)]):
+        d.rectangle([0, sy + bi * 20, img.width, sy + bi * 20 + 20], fill=bg)
+        ox = 4
+        for name in names:
             rows = ALL[name]
-            ox = 4 + i * 17 * scale
-            top = oy + (h + 1 - len(rows)) * scale
             for y, row in enumerate(rows):
                 for x, ch in enumerate(row):
-                    if ch != ".":
-                        d.rectangle([ox + x * scale, top + y * scale,
-                                     ox + (x + 1) * scale - 1, top + (y + 1) * scale - 1],
-                                    fill=PALETTE[ch][1])
+                    if ch != "." and ox + x < img.width and y < 19:
+                        d.point((ox + x, sy + bi * 20 + y), fill=PALETTE[ch][1])
+            ox += len(rows[0]) + 3
     img.save(path)
 
 

@@ -48,6 +48,10 @@ static int32_t s_gen_top_y;   // world y of the highest floor generated so far
 static int16_t s_gen_ref_x;   // last floor's center x (reachability anchor)
 static int16_t s_standing_ledge_idx = -1; // index into s_ledges, -1 if airborne
 static int8_t s_ice_dir;      // slide direction while standing on an ice ledge
+// Ledge the climber was just knocked off (rock, ice). The landing check must
+// skip it: the feet are still level with it, so without this the very next
+// tick "lands" them right back on it and the hit does nothing.
+static int16_t s_ignore_ledge_idx = -1;
 
 #define SPECIAL_LEDGE_MIN_M 150 // crumble/ice ledges start appearing above this height
 #define CRUMBLE_TICKS 24        // 0.8s @ 30fps before a landed-on crumble ledge vanishes
@@ -102,6 +106,18 @@ static int8_t s_shop_flash;               // "not enough gems" flash
 
 static int8_t s_rope_left;     // rescues left this run
 static int16_t s_rope_ticks;   // rope drawn for a moment after a rescue
+#define ROPE_TICKS 22          // ~0.7 s: rope hangs taut, then reels back up
+#define ROPE_REEL_TICKS 10     // ...the last this-many ticks it retracts
+
+#define MAX_SPARKS 4
+#define SPARK_TICKS 12
+typedef struct {
+  int16_t x, y;      // world coords of the collected gem
+  int8_t ticks;      // 0 = free
+  uint8_t color_idx;
+} Spark;
+static Spark s_sparks[MAX_SPARKS];
+static int8_t s_gem_flash;     // HUD gem counter glows after a pickup
 static int16_t s_last_ledge_idx = -1; // ledge the climber last jumped from
 static int16_t s_last_ledge_y;        // ...and its y, to detect a recycled slot
 
@@ -132,6 +148,84 @@ static uint16_t s_wave_phase;
 static int16_t s_lock_ticks;   // input-lock countdown after game over
 
 static GFont s_f14, s_f18b, s_f24b, s_f28b;
+
+// ---------------------------------------------------------------------------
+// Localization — device language via i18n_get_system_locale(), English
+// fallback. Strings are UTF-8; Pebble system fonts cover Latin-1 only.
+// ---------------------------------------------------------------------------
+
+typedef enum { L_EN, L_NL, L_FR, L_DE, L_ES, NUM_LANGS } Lang;
+
+enum {
+  S_HINT_CLIMB, S_HINT_SHOP, S_RECORD,
+  S_FROZEN, S_HIGHEST, S_NEW_RECORD, S_GEMS, S_HINT_RETRY,
+  S_WIN_TITLE,
+  S_SHOP_TITLE, S_ITEM_GRIP, S_ITEM_JACKET, S_ITEM_ROPE,
+  S_DESC_GRIP, S_DESC_JACKET, S_DESC_ROPE, S_SHOP_HINT, S_SUMMIT_NEAR, S_MAX,
+  S_PAUSED, S_HINT_RESUME, S_HINT_QUIT,
+  NUM_STRS
+};
+
+static const char *TR[NUM_LANGS][NUM_STRS] = {
+  [L_EN] = {
+    "SELECT · climb", "DOWN · shop", "Best: %ldm",
+    "Frozen!", "Highest: %ldm", "New record!", "Gems: %ld", "SELECT · again",
+    "You reached the summit!",
+    "Shop", "Grip soles", "Down jacket", "Climbing rope",
+    "Less sliding and crumbling", "Mist starts further away", "SELECT: back to a ledge",
+    "SELECT · buy    BACK · close", "The summit is within reach...", "MAX",
+    "Paused", "SELECT · resume", "BACK · quit",
+  },
+  [L_NL] = {
+    "SELECT · klimmen", "OMLAAG · winkel", "Record: %ldm",
+    "Bevroren!", "Hoogste: %ldm", "Nieuw record!", "Edelstenen: %ld", "SELECT · opnieuw",
+    "Je hebt de top bereikt!",
+    "Winkel", "Gripzolen", "Donsjack", "Klimtouw",
+    "Minder glijden en brokkelen", "Mist begint verder weg", "SELECT: terug naar richel",
+    "SELECT · kopen    TERUG · sluiten", "De top ligt binnen bereik...", "MAX",
+    "Pauze", "SELECT · verder", "TERUG · stoppen",
+  },
+  [L_FR] = {
+    "SELECT · grimper", "BAS · boutique", "Record : %ldm",
+    "Gelé !", "Altitude : %ldm", "Nouveau record !", "Gemmes : %ld", "SELECT · rejouer",
+    "Tu as atteint le sommet !",
+    "Boutique", "Semelles grip", "Doudoune", "Corde",
+    "Moins de glisse et d'éboulis", "La brume part de plus loin", "SELECT : retour au rebord",
+    "SELECT · acheter   RETOUR · fermer", "Le sommet est à portée...", "MAX",
+    "Pause", "SELECT · reprendre", "RETOUR · quitter",
+  },
+  [L_DE] = {
+    "SELECT · klettern", "RUNTER · Laden", "Rekord: %ldm",
+    "Erfroren!", "Höhe: %ldm", "Neuer Rekord!", "Edelsteine: %ld", "SELECT · nochmal",
+    "Du hast den Gipfel erreicht!",
+    "Laden", "Griffsohlen", "Daunenjacke", "Kletterseil",
+    "Weniger Rutschen, Bröckeln", "Nebel startet weiter weg", "SELECT: zurück zum Sims",
+    "SELECT · kaufen  ZURÜCK · schließen", "Der Gipfel ist in Reichweite...", "MAX",
+    "Pausiert", "SELECT · weiter", "ZURÜCK · beenden",
+  },
+  [L_ES] = {
+    "SELECT · escalar", "ABAJO · tienda", "Récord: %ldm",
+    "¡Congelado!", "Altura: %ldm", "¡Nuevo récord!", "Gemas: %ld", "SELECT · otra vez",
+    "¡Has llegado a la cima!",
+    "Tienda", "Suelas de agarre", "Plumífero", "Cuerda",
+    "Resbalas menos, aguantas más", "La niebla empieza más lejos", "SELECT: vuelve a la repisa",
+    "SELECT · comprar   ATRÁS · cerrar", "La cima está a tu alcance...", "MÁX",
+    "Pausa", "SELECT · seguir", "ATRÁS · salir",
+  },
+};
+
+static const char **s_tr = TR[L_EN];
+#define S(id) s_tr[id]
+
+static void pick_language(void) {
+  const char *loc = i18n_get_system_locale();
+  if (!loc) return;
+  if (strncmp(loc, "nl", 2) == 0) s_tr = TR[L_NL];
+  else if (strncmp(loc, "fr", 2) == 0) s_tr = TR[L_FR];
+  else if (strncmp(loc, "de", 2) == 0) s_tr = TR[L_DE];
+  else if (strncmp(loc, "es", 2) == 0) s_tr = TR[L_ES];
+  else s_tr = TR[L_EN];
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -312,6 +406,8 @@ static void start_run(void) {
   s_summit_placed = false;
   s_rope_left = s_rope;
   s_rope_ticks = 0;
+  s_gem_flash = 0;
+  for (int i = 0; i < MAX_SPARKS; i++) s_sparks[i].ticks = 0;
   s_last_ledge_idx = -1;
   s_tumbling = false;
   s_facing = 1;
@@ -331,6 +427,7 @@ static void start_run(void) {
 
   place_on_ledge(&s_ledges[0]);
   s_standing_ledge_idx = 0;
+  s_ignore_ledge_idx = -1;
   // Down jacket: the mist starts 20 px further away per level.
   s_mist_top_fp = (int32_t)(s_base_y + MIST_GAP_START + s_jacket * 20) << FP;
 
@@ -375,6 +472,7 @@ static void trigger_victory(void) {
 }
 
 static void knock_off(int32_t vx_fp) {
+  s_ignore_ledge_idx = s_standing_ledge_idx;
   s_airborne = true;
   s_bounced = false;
   s_tumbling = true;
@@ -399,6 +497,7 @@ static void try_jump(int8_t dir) {
   s_facing = dir;
   s_land_ticks = 0;
   s_standing_ledge_idx = -1;
+  s_ignore_ledge_idx = -1;
   s_vx_fp = (int32_t)dir * JUMP_VX_FP;
   s_vy_fp = JUMP_VY0_FP;
   layer_mark_dirty(s_layer);
@@ -429,9 +528,10 @@ static void try_rope(void) {
   }
   Ledge *l = &s_ledges[idx];
   s_rope_left--;
-  s_rope_ticks = 12;
+  s_rope_ticks = ROPE_TICKS;
   place_on_ledge(l);
   s_standing_ledge_idx = (int16_t)idx;
+  s_ignore_ledge_idx = -1;
   s_tumbling = false;
   s_land_ticks = LAND_TICKS;
   if (l->type == LEDGE_ICE) s_ice_dir = s_facing;
@@ -456,6 +556,8 @@ static void game_tick(void *data) {
   s_timer = app_timer_register(TICK_MS, game_tick, NULL);
   if (s_land_ticks > 0) s_land_ticks--;
   if (s_rope_ticks > 0) s_rope_ticks--;
+  if (s_gem_flash > 0) s_gem_flash--;
+  for (int i = 0; i < MAX_SPARKS; i++) if (s_sparks[i].ticks > 0) s_sparks[i].ticks--;
   int16_t prev_feet_y = s_climber_y_fp >> FP;
 
   if (s_airborne) {
@@ -480,7 +582,7 @@ static void game_tick(void *data) {
       int8_t land_dir = (s_vx_fp >= 0) ? 1 : -1;
       for (int i = 0; i < MAX_LEDGES; i++) {
         Ledge *l = &s_ledges[i];
-        if (l->w == 0) continue;
+        if (l->w == 0 || i == s_ignore_ledge_idx) continue;
         bool crossed = prev_feet_y <= l->y && feet_y >= l->y;
         bool over_ledge = (cx + CLIMBER_R >= l->x) && (cx - CLIMBER_R <= l->x + l->w);
         if (crossed && over_ledge) {
@@ -489,6 +591,7 @@ static void game_tick(void *data) {
           // to the actual landing x so jumps don't visually snap sideways.
           s_climber_x_fp = (int32_t)cx << FP;
           s_standing_ledge_idx = i;
+          s_ignore_ledge_idx = -1;
           s_tumbling = false;
           s_land_ticks = LAND_TICKS;
           if (l->type == LEDGE_ICE) {
@@ -570,13 +673,15 @@ static void game_tick(void *data) {
     }
   }
   if (s_invuln_ticks > 0) s_invuln_ticks--;
+  bool safe_on_top = !s_airborne && s_standing_ledge_idx >= 0 &&
+                     s_ledges[s_standing_ledge_idx].type == LEDGE_SUMMIT;
   for (int i = 0; i < MAX_ROCKS; i++) {
     Rock *r = &s_rocks[i];
     if (!r->active) continue;
     r->y_fp += ROCK_SPEED_FP;
     int32_t ry = r->y_fp >> FP;
     if (ry - s_cam_y > s_bounds.size.h + 20) { r->active = false; continue; }
-    if (s_invuln_ticks == 0) {
+    if (s_invuln_ticks == 0 && !safe_on_top) {
       int32_t rx = r->x_fp >> FP;
       int32_t dx = rx - (s_climber_x_fp >> FP);
       int32_t dy = ry - (s_climber_y_fp >> FP);
@@ -602,6 +707,14 @@ static void game_tick(void *data) {
     if (dx * dx + dy * dy < 121) {
       g->active = false;
       s_gems_run++;
+      s_gem_flash = 8;
+      // Reuse the oldest sparkle slot if all are busy.
+      int slot = 0;
+      for (int k = 0; k < MAX_SPARKS; k++) {
+        if (s_sparks[k].ticks < s_sparks[slot].ticks) slot = k;
+      }
+      s_sparks[slot] = (Spark){ .x = g->x, .y = g->y, .ticks = SPARK_TICKS,
+                                .color_idx = g->color_idx };
     }
   }
 
@@ -756,8 +869,10 @@ static void draw_ledges(GContext *ctx) {
         continue;
       }
       if (l->type == LEDGE_CRUMBLE && l->crumble_ticks >= 0) {
-        // Trembles the whole time it's counting down to vanishing.
+        // Trembles the whole time it's counting down to vanishing, and
+        // sags a couple of pixels just before it gives way.
         sx = (int16_t)(sx + ((l->crumble_ticks % 2) ? 1 : -1));
+        if (l->crumble_ticks < 8) sy = (int16_t)(sy + (8 - l->crumble_ticks) / 3);
       }
       draw_ledge(ctx, l, sx, sy);
     }
@@ -846,6 +961,32 @@ static void draw_gems(GContext *ctx, GRect b) {
   }
 }
 
+// Gem pickup: four specks flying outward plus a rising "+1".
+static void draw_sparks(GContext *ctx, GRect b) {
+  for (int i = 0; i < MAX_SPARKS; i++) {
+    const Spark *sp = &s_sparks[i];
+    if (sp->ticks <= 0) continue;
+    int16_t age = (int16_t)(SPARK_TICKS - sp->ticks);
+    int16_t sx = sp->x;
+    int16_t sy = (int16_t)(sp->y - s_cam_y);
+    if (sy < -20 || sy > b.size.h + 6) continue;
+    int16_t r = (int16_t)(4 + age);
+    GColor c = (age / 2) % 2 ? GColorWhite : gem_color(sp->color_idx);
+    fill(ctx, c, sx - 1, sy - r - 1, 2, 2);
+    fill(ctx, c, sx - 1, sy + r - 1, 2, 2);
+    fill(ctx, c, sx - r - 1, sy - 1, 2, 2);
+    fill(ctx, c, sx + r - 1, sy - 1, 2, 2);
+    int16_t d = (int16_t)(r * 2 / 3);
+    fill(ctx, GColorWhite, sx - d, sy - d, 1, 1);
+    fill(ctx, GColorWhite, sx + d, sy - d, 1, 1);
+    fill(ctx, GColorWhite, sx - d, sy + d, 1, 1);
+    fill(ctx, GColorWhite, sx + d, sy + d, 1, 1);
+    graphics_context_set_text_color(ctx, GColorWhite);
+    graphics_draw_text(ctx, "+1", s_f14, GRect(sx + 4, sy - 20 - age, 20, 16),
+                       GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
+  }
+}
+
 static void draw_rocks(GContext *ctx, GRect b) {
   graphics_context_set_fill_color(ctx, GColorDarkGray);
   graphics_context_set_stroke_color(ctx, GColorBlack);
@@ -930,7 +1071,7 @@ static void draw_hud(GContext *ctx, GRect b) {
   // Gem count, right-aligned.
   snprintf(buf, sizeof(buf), "%ld", (long)(s_gems_total + s_gems_run));
   draw_gem_icon(ctx, (int16_t)(b.size.w - 42), 9);
-  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_context_set_text_color(ctx, s_gem_flash > 0 ? GColorChromeYellow : GColorWhite);
   graphics_draw_text(ctx, buf, s_f14, GRect((int16_t)(b.size.w - 34), 1, 32, 16),
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 }
@@ -949,15 +1090,28 @@ static void draw_game(GContext *ctx, GRect b) {
   int16_t feet_y = (int16_t)((s_climber_y_fp >> FP) - s_cam_y);
   const Sprite *pose = climber_pose();
   if (s_rope_ticks > 0) {
-    // The rope that just hauled the climber back up.
-    int16_t top = (int16_t)(feet_y - pose->h);
-    fill(ctx, GColorBlack, cx - 2, 18, 4, top - 18);
-    fill(ctx, GColorChromeYellow, cx - 1, 18, 2, top - 18);
+    // The rope that just hauled the climber back up: it hangs taut from
+    // above for a moment, then reels back up out of the picture.
+    int16_t end = (int16_t)(feet_y - pose->h + 2);
+    if (s_rope_ticks < ROPE_REEL_TICKS) {
+      end = (int16_t)(18 + (end - 18) * s_rope_ticks / ROPE_REEL_TICKS);
+    }
+    if (end > 18) {
+      fill(ctx, GColorBlack, cx - 2, 18, 4, end - 18);
+      fill(ctx, GColorChromeYellow, cx - 1, 18, 2, end - 18);
+      for (int16_t y = (int16_t)(20 + (s_anim % 4)); y < end; y += 4) {
+        fill(ctx, GColorWindsorTan, cx - 1, y, 1, 1);   // twisted strands
+        fill(ctx, GColorWindsorTan, cx, (int16_t)(y + 2), 1, 1);
+      }
+      fill(ctx, GColorBlack, cx - 3, end - 1, 6, 3);     // the hook
+      fill(ctx, GColorLightGray, cx - 2, end, 4, 1);
+    }
   }
   // Blink the climber while invulnerable, as damage feedback.
   if (s_invuln_ticks == 0 || (s_invuln_ticks / 3) % 2 == 0) {
     draw_standing(ctx, pose, cx, feet_y, s_facing, 1);
   }
+  draw_sparks(ctx, b);
 
   draw_mist(ctx, b);
   draw_hud(ctx, b);
@@ -982,7 +1136,7 @@ static void draw_title(GContext *ctx, GRect b) {
 
   draw_center_text(ctx, "Pebble Peaks", s_f28b, 4, 34, b, GColorWhite);
   char buf[40];
-  snprintf(buf, sizeof(buf), "Record %ldm", (long)s_alltime_best_m);
+  snprintf(buf, sizeof(buf), S(S_RECORD), (long)s_alltime_best_m);
   draw_center_text(ctx, buf, s_f18b, 36, 22, b, GColorWhite);
   draw_gem_icon(ctx, (int16_t)(b.size.w / 2 - 14), 69);
   snprintf(buf, sizeof(buf), "%ld", (long)s_gems_total);
@@ -999,36 +1153,36 @@ static void draw_title(GContext *ctx, GRect b) {
     draw_sprite(ctx, &SPR_FLAG0, (int16_t)(cx + 18), (int16_t)(ground - SPR_FLAG0.h * 2), false, 2);
   }
 
-  draw_center_text(ctx, "SELECT · klimmen", s_f18b, 156, 24, b, GColorWhite);
-  draw_center_text(ctx, "DOWN · winkel", s_f18b, 180, 24, b, GColorWhite);
+  draw_center_text(ctx, S(S_HINT_CLIMB), s_f18b, 156, 24, b, GColorWhite);
+  draw_center_text(ctx, S(S_HINT_SHOP), s_f18b, 180, 24, b, GColorWhite);
 }
 
 static void draw_gameover(GContext *ctx, GRect b) {
   draw_game(ctx, b);
-  int16_t top = (int16_t)(b.size.h / 2 - 56);
-  fill(ctx, GColorBlack, 0, top, b.size.w, 112);
-  draw_center_text(ctx, "Bevroren!", s_f28b, top + 2, 30, b, GColorCeleste);
-  char buf[32];
-  snprintf(buf, sizeof(buf), "Hoogste: %ldm", (long)s_best_height_m);
+  int16_t top = (int16_t)(b.size.h / 2 - 62);
+  fill(ctx, GColorBlack, 0, top, b.size.w, 124);
+  draw_center_text(ctx, S(S_FROZEN), s_f28b, top + 2, 30, b, GColorCeleste);
+  char buf[40];
+  snprintf(buf, sizeof(buf), S(S_HIGHEST), (long)s_best_height_m);
   draw_center_text(ctx, buf, s_f18b, top + 34, 22, b, GColorWhite);
   if (s_new_record) {
-    draw_center_text(ctx, "Nieuw record!", s_f14, top + 54, 18, b, GColorGreen);
+    draw_center_text(ctx, S(S_NEW_RECORD), s_f14, top + 54, 18, b, GColorGreen);
   } else {
-    snprintf(buf, sizeof(buf), "Record: %ldm", (long)s_alltime_best_m);
+    snprintf(buf, sizeof(buf), S(S_RECORD), (long)s_alltime_best_m);
     draw_center_text(ctx, buf, s_f14, top + 54, 18, b, GColorLightGray);
   }
-  snprintf(buf, sizeof(buf), "Edelstenen: %ld", (long)s_last_gems);
+  snprintf(buf, sizeof(buf), S(S_GEMS), (long)s_last_gems);
   draw_center_text(ctx, buf, s_f14, top + 70, 18, b, GColorCeleste);
   if (s_lock_ticks == 0) {
-    draw_center_text(ctx, "SELECT · opnieuw   DOWN · winkel", s_f14, top + 90, 18, b,
-                     GColorLightGray);
+    draw_center_text(ctx, S(S_HINT_RETRY), s_f14, top + 88, 18, b, GColorWhite);
+    draw_center_text(ctx, S(S_HINT_SHOP), s_f14, top + 104, 18, b, GColorLightGray);
   }
 }
 
 static void draw_victory(GContext *ctx, GRect b) {
   fill(ctx, GColorOxfordBlue, 0, 0, b.size.w, b.size.h);
   draw_stars(ctx, b);
-  draw_center_text(ctx, "Je hebt de top bereikt!", s_f24b, 4, 56, b, GColorPastelYellow);
+  draw_center_text(ctx, S(S_WIN_TITLE), s_f24b, 4, 56, b, GColorPastelYellow);
 
   // Summit scene: the climber hopping for joy beside the planted flag.
   int16_t ground = 140;
@@ -1039,13 +1193,22 @@ static void draw_victory(GContext *ctx, GRect b) {
   draw_standing(ctx, &SPR_JUMP, cx, (int16_t)(ground - 6), 1, 2);
   draw_sprite(ctx, flag_frame(), (int16_t)(cx + 18), (int16_t)(ground - SPR_FLAG0.h * 2), false, 2);
 
-  fill(ctx, GColorBlack, 0, 172, b.size.w, b.size.h - 172);
-  char buf[32];
-  snprintf(buf, sizeof(buf), "%ldm  ·  Edelstenen: %ld", (long)SUMMIT_M, (long)s_last_gems);
-  draw_center_text(ctx, buf, s_f18b, 174, 22, b, GColorWhite);
+  // Height and haul as "1000m  <gem> 37", language-free.
+  fill(ctx, GColorBlack, 0, 168, b.size.w, b.size.h - 168);
+  char buf[16];
+  int16_t mid = (int16_t)(b.size.w / 2);
+  snprintf(buf, sizeof(buf), "%ldm", (long)SUMMIT_M);
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, buf, s_f18b, GRect(0, 168, mid - 6, 22),
+                     GTextOverflowModeWordWrap, GTextAlignmentRight, NULL);
+  draw_gem_icon(ctx, (int16_t)(mid + 10), 180);
+  snprintf(buf, sizeof(buf), "%ld", (long)s_last_gems);
+  graphics_context_set_text_color(ctx, GColorWhite);
+  graphics_draw_text(ctx, buf, s_f18b, GRect(mid + 18, 168, mid - 20, 22),
+                     GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
   if (s_lock_ticks == 0) {
-    draw_center_text(ctx, "SELECT · opnieuw   DOWN · winkel", s_f14, 202, 18, b,
-                     GColorLightGray);
+    draw_center_text(ctx, S(S_HINT_RETRY), s_f14, 192, 18, b, GColorWhite);
+    draw_center_text(ctx, S(S_HINT_SHOP), s_f14, 208, 18, b, GColorLightGray);
   }
 }
 
@@ -1055,7 +1218,7 @@ static void draw_shop(GContext *ctx, GRect b) {
   char buf[24];
   GColor head = s_shop_flash ? GColorRed : GColorWhite;
   graphics_context_set_text_color(ctx, head);
-  graphics_draw_text(ctx, "Winkel", s_f24b, GRect(8, 2, 110, 30),
+  graphics_draw_text(ctx, S(S_SHOP_TITLE), s_f24b, GRect(8, 2, 110, 30),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
   draw_gem_icon(ctx, (int16_t)(b.size.w - 54), 18);
   snprintf(buf, sizeof(buf), "%ld", (long)s_gems_total);
@@ -1063,10 +1226,8 @@ static void draw_shop(GContext *ctx, GRect b) {
   graphics_draw_text(ctx, buf, s_f18b, GRect(b.size.w - 46, 7, 44, 22),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 
-  static const char *const names[3] = {"Gripzolen", "Donsjack", "Klimtouw"};
-  static const char *const descs[3] = {"Minder glijden en brokkelen",
-                                       "Mist begint verder weg",
-                                       "SELECT: terug naar richel"};
+  const char *names[3] = {S(S_ITEM_GRIP), S(S_ITEM_JACKET), S(S_ITEM_ROPE)};
+  const char *descs[3] = {S(S_DESC_GRIP), S(S_DESC_JACKET), S(S_DESC_ROPE)};
   int8_t levels[3] = {s_grip, s_jacket, s_rope};
 
   for (int i = 0; i < 3; i++) {
@@ -1098,7 +1259,7 @@ static void draw_shop(GContext *ctx, GRect b) {
 
     graphics_context_set_text_color(ctx, GColorPastelYellow);
     if (levels[i] >= MAX_LEVEL) {
-      snprintf(buf, sizeof(buf), "MAX");
+      snprintf(buf, sizeof(buf), "%s", S(S_MAX));
     } else {
       draw_gem_icon(ctx, (int16_t)(card.origin.x + card.size.w - 46), y + 12);
       snprintf(buf, sizeof(buf), "%ld", (long)SHOP_COST[(int)levels[i]]);
@@ -1110,7 +1271,7 @@ static void draw_shop(GContext *ctx, GRect b) {
   }
 
   bool all_max = s_grip >= MAX_LEVEL && s_jacket >= MAX_LEVEL && s_rope >= MAX_LEVEL;
-  draw_center_text(ctx, all_max ? "De top ligt binnen bereik..." : "SELECT · kopen", s_f14,
+  draw_center_text(ctx, all_max ? S(S_SUMMIT_NEAR) : S(S_SHOP_HINT), s_f14,
                    b.size.h - 26, 20, b, all_max ? GColorCeleste : GColorLightGray);
 }
 
@@ -1124,10 +1285,10 @@ static void layer_update(Layer *layer, GContext *ctx) {
       break;
     case ST_PAUSED:
       draw_game(ctx, b);
-      fill(ctx, GColorBlack, 0, b.size.h / 2 - 26, b.size.w, 52);
-      draw_center_text(ctx, "Pauze", s_f28b, b.size.h / 2 - 24, 30, b, GColorWhite);
-      draw_center_text(ctx, "SELECT · verder   BACK · stop", s_f14, b.size.h / 2 + 6, 18, b,
-                       GColorLightGray);
+      fill(ctx, GColorBlack, 0, b.size.h / 2 - 30, b.size.w, 64);
+      draw_center_text(ctx, S(S_PAUSED), s_f28b, b.size.h / 2 - 28, 30, b, GColorWhite);
+      draw_center_text(ctx, S(S_HINT_RESUME), s_f14, b.size.h / 2 + 2, 18, b, GColorWhite);
+      draw_center_text(ctx, S(S_HINT_QUIT), s_f14, b.size.h / 2 + 16, 18, b, GColorLightGray);
       break;
     case ST_GAMEOVER:
       draw_gameover(ctx, b);
@@ -1293,6 +1454,7 @@ static void window_unload(Window *window) {
 
 static void init(void) {
   srand(time(NULL));
+  pick_language();
   load_progress();
   s_f14 = fonts_get_system_font(FONT_KEY_GOTHIC_14);
   s_f18b = fonts_get_system_font(FONT_KEY_GOTHIC_18_BOLD);

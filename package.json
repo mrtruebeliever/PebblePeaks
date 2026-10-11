@@ -3,7 +3,9 @@
   "author": "mrtruebeliever",
   "version": "1.0.0",
   "license": "MIT",
-  "keywords": ["pebble-app"],
+  "keywords": [
+    "pebble-app"
+  ],
   "private": true,
   "dependencies": {},
   "pebble": {
@@ -18,7 +20,14 @@
       "watchface": false
     },
     "resources": {
-      "media": []
+      "media": [
+        {
+          "type": "bitmap",
+          "name": "IMAGE_MENU_ICON",
+          "file": "images/menu_icon.png",
+          "menuIcon": true
+        }
+      ]
     }
   }
 }
