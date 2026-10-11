@@ -61,6 +61,17 @@ static int16_t s_ignore_ledge_idx = -1;
 #define CRUMBLE_RESPAWN_TICKS 90 // ...and it is back 3 s later, so a lone crumbled floor can't strand you
 #define ICE_SLIDE_FP 384        // 1.5 px/tick in 8.8 fixed
 
+// The camera keeps the climber at CAM_LINE_PCT of the screen height, so
+// most of the view is the climb ahead (and the aim has room above).
+// Ledges and gems stay alive KEEP_BELOW_PX under the bottom edge. A rope
+// rescue aims for the ledge nearest RESCUE_LINE_PCT down the screen, about
+// a floor below the camera line, so being saved still costs some height.
+// (Keeping more below, or rescuing to mid-screen, made the summit far
+// easier in the simulator — see tools/TUNING.md.)
+#define CAM_LINE_PCT 55
+#define KEEP_BELOW_PX 60
+#define RESCUE_LINE_PCT 67
+
 #define MIST_GAP_START 60      // px below climber's start the mist begins
 #define MIST_BASE_SPEED_FP 150 // 0.59 px/tick in 8.8 fixed
 #define MIST_MAX_SCALE_FP 450  // caps speed at ~1.03 px/tick (450/256 ~= 1.76x)
@@ -477,7 +488,7 @@ static void ensure_floors_generated(void) {
 static void recycle_offscreen_ledges(void) {
   for (int i = 0; i < MAX_LEDGES; i++) {
     Ledge *l = &s_ledges[i];
-    if (l->w != 0 && (l->y - s_cam_y) > s_bounds.size.h + 60) l->w = 0;
+    if (l->w != 0 && (l->y - s_cam_y) > s_bounds.size.h + KEEP_BELOW_PX) l->w = 0;
   }
 }
 
@@ -674,7 +685,7 @@ static int aim_trace(int16_t *x, int16_t *y) {
   *y = (int16_t)oy;
   for (int32_t t = 6; t <= ROPE_RANGE; t += 3) {
     int32_t px = ox + dx * t / TRIG_MAX_RATIO, py = oy + dy * t / TRIG_MAX_RATIO;
-    if (px < 0 || px >= s_bounds.size.w || py - s_cam_y < 36) return -1;
+    if (px < 0 || px >= s_bounds.size.w || py - s_cam_y < 24) return -1;
     *x = (int16_t)px;
     *y = (int16_t)py;
     for (int i = 0; i < MAX_LEDGES; i++) {
@@ -733,15 +744,16 @@ static void aim_tick(void) {
 }
 
 // Climbing rope: while airborne, SELECT fires the hook at the ledge nearest
-// the middle of the screen (above the climber, on screen and clear of the
-// HUD, so the rescue always ends in view), then the climber climbs it.
+// the RESCUE_LINE_PCT line, just below mid-screen (above the climber, on
+// screen and clear of the HUD, so the rescue always ends in view), then the
+// climber climbs it.
 static void try_rope(void) {
   if (s_state != ST_PLAYING || !s_airborne || s_rope_left <= 0 ||
       s_rope_phase != ROPE_IDLE) return;
   int32_t feet_y = s_climber_y_fp >> FP;
-  int32_t top_y = s_cam_y + 34;
+  int32_t top_y = s_cam_y + 24;
   int32_t bottom_y = s_cam_y + s_bounds.size.h - 10;
-  int32_t mid_y = s_cam_y + s_bounds.size.h / 2;
+  int32_t mid_y = s_cam_y + s_bounds.size.h * RESCUE_LINE_PCT / 100;
   int idx = -1;
   int32_t best = 0;
   for (int i = 0; i < MAX_LEDGES; i++) {
@@ -916,9 +928,9 @@ static void game_tick(void *data) {
     }
   }
 
-  // Camera: follows the climber up once they're above 40% of the screen.
+  // Camera: follows the climber up once they rise above the CAM_LINE_PCT line.
   // It never scrolls back down — falling just puts you back in the mist's way.
-  int32_t threshold = (int32_t)(s_bounds.size.h * 2 / 5);
+  int32_t threshold = (int32_t)(s_bounds.size.h * CAM_LINE_PCT / 100);
   int32_t climber_screen_y = (s_climber_y_fp >> FP) - s_cam_y;
   if (climber_screen_y < threshold) {
     int32_t target_cam = (s_climber_y_fp >> FP) - threshold;
@@ -978,7 +990,7 @@ static void game_tick(void *data) {
   for (int i = 0; i < MAX_GEMS; i++) {
     Gem *g = &s_gems[i];
     if (!g->active) continue;
-    if (g->y - s_cam_y > s_bounds.size.h + 60) { g->active = false; continue; }
+    if (g->y - s_cam_y > s_bounds.size.h + KEEP_BELOW_PX) { g->active = false; continue; }
     int32_t body_y = (s_climber_y_fp >> FP) - 14;
     int32_t dx = g->x - (s_climber_x_fp >> FP);
     int32_t dy = g->y - body_y;
@@ -1080,9 +1092,11 @@ static void draw_aim(GContext *ctx, int16_t cx, int16_t feet_y) {
   fill(ctx, c, (int16_t)(ex - r), ey, (int16_t)(2 * r + 1), 1);
   fill(ctx, c, ex, (int16_t)(ey - r), 1, (int16_t)(2 * r + 1));
 
-  fill(ctx, GColorBlack, 0, 18, s_bounds.size.w, 15);
+  // Hint along the bottom edge, leaving the sky above clear to aim into.
+  int16_t hint_y = (int16_t)(s_bounds.size.h - 16);
+  fill(ctx, GColorBlack, 0, hint_y, s_bounds.size.w, 16);
   graphics_context_set_text_color(ctx, GColorWhite);
-  graphics_draw_text(ctx, S(s_aim_mode == AIM_TILT ? S_AIM_HINT : S_AIM_HINT_SWING), s_f14, GRect(0, 15, s_bounds.size.w, 16),
+  graphics_draw_text(ctx, S(s_aim_mode == AIM_TILT ? S_AIM_HINT : S_AIM_HINT_SWING), s_f14, GRect(0, (int16_t)(hint_y - 3), s_bounds.size.w, 16),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentCenter, NULL);
 }
 

@@ -185,7 +185,7 @@ class Game:
         # then the climber hauls up (see try_rope / rope_step in main.c).
         if self.state != "play" or not self.air or self.rope_left <= 0 or self.rope_phase: return False
         feet = self.cy >> FP
-        top, bottom, mid = self.cam_y + 34, self.cam_y + H - 10, self.cam_y + H // 2
+        top, bottom, mid = self.cam_y + 24, self.cam_y + H - 10, self.cam_y + H * 2 // 3   # RESCUE_LINE_PCT
         idx, best = -1, 0
         for i, l in enumerate(self.ledges):
             if l.w == 0 or l.type == GONE: continue
@@ -280,7 +280,7 @@ class Game:
                 if P["CRUMBLE_RESPAWN"]: l.type = GONE; l.ct = P["CRUMBLE_RESPAWN"]
                 else: l.w = 0
                 if here: self.knock(0, 'crumble')
-        thr = H * 2 // 5
+        thr = H * 55 // 100   # CAM_LINE_PCT
         csy = (self.cy >> FP) - self.cam_y
         if csy < thr:
             t = (self.cy >> FP) - thr
@@ -292,7 +292,7 @@ class Game:
         if self.cam_y < self.cam_top: self.cam_top = self.cam_y
         self.ensure_floors()
         for l in self.ledges:
-            if l.w != 0 and l.y - (self.cam_top if kp else self.cam_y) > H + 60 + kp: l.w = 0
+            if l.w != 0 and l.y - (self.cam_top if kp else self.cam_y) > H + 60 + kp: l.w = 0   # KEEP_BELOW_PX
         self.height = self.height_of(self.cy >> FP)
         if self.height > self.best: self.best = self.height
         # rocks
@@ -320,7 +320,7 @@ class Game:
         body_y = (self.cy >> FP) - 14; cxp = self.cx >> FP
         keepg = []
         for g in self.gems:
-            if g[1] - self.cam_y > H + 60: continue
+            if g[1] - self.cam_y > H + 60: continue   # KEEP_BELOW_PX
             dx = g[0] - cxp; dy = g[1] - body_y
             if dx * dx + dy * dy < 121:
                 if g[2]: self.rope_left = min(9, self.rope_left + 1)

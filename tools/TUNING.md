@@ -176,3 +176,13 @@ Met de betere runs (meer verdiepingen) blijft het grind-doel ~35 runs voor decen
   geen uitrusting 238 m eerste run, touw 5 ~422 m, alles 5 mediaan 890 m en top 37,5%; ~35 runs om alles te kopen.
 * Edelsteenrichels (2 edelstenen + 1 touwrol, alleen met touw over) zitten niet in de sim: de bot richt niet.
   Ze kosten netto geen touw bij een treffer, alleen tijd tegenover de mist.
+
+## Camera lager (oktober 2026)
+* De camera houdt de klimmer nu op 55% van boven (was 40%), zodat er ruimte is om naar boven te richten
+  (edelsteenrichels lagen anders achter de HUD). Bijwerkingen in de sim (120 seeds, decent, alles 5):
+  * camera 55% + richels 94 px onder het scherm bewaren: top 56,7% (was 37,5%);
+  * camera 55% alleen: 44%; 94 px bewaren alleen: 49%;
+  * reddingstouw naar het midden kost met de lagere camera geen hoogte meer.
+* Gekozen: camera 55%, `KEEP_BELOW_PX 60` (ongewijzigd), redding naar de richel bij 67% van het scherm
+  (`RESCUE_LINE_PCT`, ~een verdieping onder de cameralijn). Resultaat: geen uitrusting 184 m mediaan
+  (238 m eerste run), touw 5 406 m, alles 5 939 m mediaan en top 41,7% (binnen de ruis van 37,5%).
