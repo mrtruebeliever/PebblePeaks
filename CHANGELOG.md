@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.0
+
+- **Pebble Round 2 (gabbro):** builds for the round screen. The climb keeps to a
+  200 px column in the middle of the circle, the HUD gets two rows inside it,
+  and the shop and settings are inset. Store screenshots for the Round 2.
+
 ## 1.0.0
 
 - **First release.** A vertical climber for the Pebble Time 2: UP jumps

@@ -32,6 +32,8 @@ FEATURES
 • A real ending: reach the summit at 1000 m and grab the flag.
 • Early-90s style pixel art made for the Pebble Time 2 (Emery) colour screen,
   with parallax mountains and a sky that runs from day to night.
+• Also plays on the round Pebble Round 2 (Gabbro), on a column in the middle
+  of the circle; no sound there.
 • Chip sound effects on the Time 2 speaker, and a backlight that takes the
   colour of the sky and flashes red when the mist closes in.
 • Settings for backlight, light effects, vibration, sound and aiming.
@@ -43,5 +45,5 @@ FEATURES
 **Category:** Games
 **Icons:** store/icon-80.png, store/icon-144.png
 **Banner:** store/banner-720x320.png
-**Screenshots:** store/screenshots/
+**Screenshots:** store/screenshots/ (Round 2: store/screenshots/gabbro/)
 **Demo:** store/pebblepeaks-demo.gif

@@ -1,6 +1,7 @@
 # Pebble Peaks
 
-Een verticale klimmer voor de Pebble Time 2 (emery), het zusje van
+Een verticale klimmer voor de Pebble Time 2 (emery, ook gebouwd voor de ronde
+Pebble Round 2, gabbro), het zusje van
 [PebbleDiver](https://github.com/mrtruebeliever/PebbleDiver).
 
 Spring van richel naar richel een berg op terwijl van onderaf ijskoude mist

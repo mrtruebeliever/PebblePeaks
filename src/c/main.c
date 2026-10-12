@@ -12,6 +12,13 @@
 #define FP 8                  // 8.8 fixed point
 
 #define CLIMBER_R 7            // collision/wall-bounce radius
+// Round (gabbro): the climb keeps to a 200 px column in the middle of the
+// circle, so no ledge sits out of sight past the rim at the top or bottom.
+#define PLAY_L PBL_IF_ROUND_ELSE(30, 0)
+#define HUD_H PBL_IF_ROUND_ELSE(40, 18)
+// Round: menus are inset so their corners stay inside the circle.
+#define RX PBL_IF_ROUND_ELSE(30, 0)
+#define RY PBL_IF_ROUND_ELSE(16, 0)
 #define LAND_TICKS 4           // frames of the knees-bent landing pose
 #define FALL_POSE_VY_FP 2400   // faster than any normal landing: flail
 
@@ -464,7 +471,7 @@ static void maybe_place_gem_ledge(int32_t center, int16_t half_w, int32_t floor_
   if (s_rope_left <= 0 || height_from_world_y(floor_y) < GEM_LEDGE_MIN_M) return;
   if (rand() % 100 >= GEM_LEDGE_CHANCE) return;
   int32_t half_b = GEM_LEDGE_W / 2;
-  int32_t cb = center < s_bounds.size.w / 2 ? s_bounds.size.w - half_b - 6 : half_b + 6;
+  int32_t cb = center < s_bounds.size.w / 2 ? s_bounds.size.w - PLAY_L - half_b - 6 : PLAY_L + half_b + 6;
   int32_t gap = cb > center ? cb - center : center - cb;
   if (gap < half_w + half_b + 40) return;
   Ledge *slot = find_free_ledge_slot();
@@ -494,8 +501,8 @@ static void generate_floor(void) {
 
   int8_t dir = (rand() % 2) ? 1 : -1;
   int32_t center = s_gen_ref_x + dir * reach;
-  int32_t min_c = half_w + 8;
-  int32_t max_c = s_bounds.size.w - half_w - 8;
+  int32_t min_c = PLAY_L + half_w + 8;
+  int32_t max_c = s_bounds.size.w - PLAY_L - half_w - 8;
   // If the reachable spot would run off the edge, jump the other way
   // instead of clamping — clamping would silently break the reach guarantee.
   if (center < min_c || center > max_c) {
@@ -1086,11 +1093,11 @@ static void game_tick(void *data) {
 
     // Walls bounce the jump back once, at half horizontal speed.
     int16_t cx = s_climber_x_fp >> FP;
-    if (cx - CLIMBER_R < 0) {
-      s_climber_x_fp = (int32_t)CLIMBER_R << FP;
+    if (cx - CLIMBER_R < PLAY_L) {
+      s_climber_x_fp = (int32_t)(PLAY_L + CLIMBER_R) << FP;
       if (!s_bounced) { s_vx_fp = -s_vx_fp / 2; s_bounced = true; }
-    } else if (cx + CLIMBER_R > s_bounds.size.w) {
-      s_climber_x_fp = (int32_t)(s_bounds.size.w - CLIMBER_R) << FP;
+    } else if (cx + CLIMBER_R > s_bounds.size.w - PLAY_L) {
+      s_climber_x_fp = (int32_t)(s_bounds.size.w - PLAY_L - CLIMBER_R) << FP;
       if (!s_bounced) { s_vx_fp = -s_vx_fp / 2; s_bounced = true; }
     }
 
@@ -1901,22 +1908,25 @@ static void draw_gem_icon(GContext *ctx, int16_t x, int16_t y) {
 }
 
 static void draw_hud(GContext *ctx, GRect b) {
-  fill(ctx, GColorBlack, 0, 0, b.size.w, 18);
+  fill(ctx, GColorBlack, 0, 0, b.size.w, HUD_H);
+  // Round: the mist gauge sits alone on top, the counters on a row below it,
+  // pulled in from the rim.
+  const int16_t ry = PBL_IF_ROUND_ELSE(19, 0), rx = PBL_IF_ROUND_ELSE(56, 0);
 
   char buf[12];
   snprintf(buf, sizeof(buf), "%ldm", (long)s_height_m);
   graphics_context_set_text_color(ctx, GColorWhite);
-  graphics_draw_text(ctx, buf, s_f14, GRect(4, 1, 40, 16),
+  graphics_draw_text(ctx, buf, s_f14, GRect(4 + rx, 1 + ry, 40, 16),
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 
   // Ropes left: a little coil and a count (greyed out when used up,
   // glowing for a moment whenever it changes).
   if (s_rope > 0 || s_rope_left > 0) {
-    draw_sprite(ctx, &SPR_ICON_ROPE_S, 44, 5, false, 1);
+    draw_sprite(ctx, &SPR_ICON_ROPE_S, 44 + rx, 5 + ry, false, 1);
     graphics_context_set_text_color(ctx, s_rope_flash > 0 ? GColorChromeYellow :
                                     s_rope_left > 0 ? GColorWhite : GColorDarkGray);
     snprintf(buf, sizeof(buf), "%d", s_rope_left);
-    graphics_draw_text(ctx, buf, s_f14, GRect(56, 1, 14, 16),
+    graphics_draw_text(ctx, buf, s_f14, GRect(56 + rx, 1 + ry, 14, 16),
                        GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
   }
 
@@ -1933,9 +1943,9 @@ static void draw_hud(GContext *ctx, GRect b) {
 
   // Gem count, right-aligned.
   snprintf(buf, sizeof(buf), "%ld", (long)(s_gems_total + s_gems_run));
-  draw_gem_icon(ctx, (int16_t)(b.size.w - 42), 9);
+  draw_gem_icon(ctx, (int16_t)(b.size.w - 42 - rx), 9 + ry);
   graphics_context_set_text_color(ctx, s_gem_flash > 0 ? GColorChromeYellow : GColorWhite);
-  graphics_draw_text(ctx, buf, s_f14, GRect((int16_t)(b.size.w - 34), 1, 32, 16),
+  graphics_draw_text(ctx, buf, s_f14, GRect((int16_t)(b.size.w - 34 - rx), 1 + ry, 32, 16),
                      GTextOverflowModeWordWrap, GTextAlignmentLeft, NULL);
 }
 
@@ -2030,7 +2040,7 @@ static void draw_game(GContext *ctx, GRect b) {
 static void draw_center_text(GContext *ctx, const char *text, GFont font,
                              int16_t y, int16_t h, GRect b, GColor color) {
   graphics_context_set_text_color(ctx, color);
-  graphics_draw_text(ctx, text, font, GRect(4, y, b.size.w - 8, h),
+  graphics_draw_text(ctx, text, font, GRect(4 + RX, y, b.size.w - 8 - 2 * RX, h),
                      GTextOverflowModeWordWrap, GTextAlignmentCenter, NULL);
 }
 
@@ -2080,14 +2090,15 @@ static const char *capitalized(const char *str, char *buf, size_t n) {
 static void draw_settings(GContext *ctx, GRect b) {
   fill(ctx, GColorOxfordBlue, 0, 0, b.size.w, b.size.h);
   graphics_context_set_text_color(ctx, GColorWhite);
-  graphics_draw_text(ctx, S(S_SETTINGS_TITLE), s_f24b, GRect(8, 0, b.size.w - 16, 30),
-                     GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
+  graphics_draw_text(ctx, S(S_SETTINGS_TITLE), s_f24b, GRect(8 + RX, RY, b.size.w - 16 - 2 * RX, 30),
+                     GTextOverflowModeTrailingEllipsis,
+                     PBL_IF_ROUND_ELSE(GTextAlignmentCenter, GTextAlignmentLeft), NULL);
 
   const char *labels[NUM_SETTINGS] = { S(S_OPT_BACKLIGHT), S(S_OPT_LIGHT_FX), S(S_OPT_VIBRATION),
                                        S(S_OPT_SOUND), S(S_OPT_AIM), S(S_OPT_RESET) };
   for (int i = 0; i < NUM_SETTINGS; i++) {
-    int16_t y = (int16_t)(32 + i * 28);
-    GRect row = GRect(6, y, b.size.w - 12, 26);
+    int16_t y = (int16_t)(32 + RY + i * 28);
+    GRect row = GRect(6 + RX, y, b.size.w - 12 - 2 * RX, 26);
     // Reset, once armed, becomes a red confirm bar.
     if (i == NUM_SETTINGS - 1 && s_reset_armed) {
       graphics_context_set_fill_color(ctx, GColorRed);
@@ -2139,7 +2150,9 @@ static void draw_settings(GContext *ctx, GRect b) {
                        GRect(row.origin.x + row.size.w - 82, y + 4, 76, 20),
                        GTextOverflowModeTrailingEllipsis, GTextAlignmentRight, NULL);
   }
+#if !PBL_ROUND   // no room under the rows inside the circle
   draw_center_text(ctx, S(S_SETTINGS_HINT), s_f14, (int16_t)(b.size.h - 34), 34, b, GColorLightGray);
+#endif
 }
 
 static void draw_gameover(GContext *ctx, GRect b) {
@@ -2202,12 +2215,13 @@ static void draw_shop(GContext *ctx, GRect b) {
   char buf[24];
   GColor head = s_shop_flash ? GColorRed : GColorWhite;
   graphics_context_set_text_color(ctx, head);
-  graphics_draw_text(ctx, S(S_SHOP_TITLE), s_f24b, GRect(8, 2, 110, 30),
+  graphics_draw_text(ctx, S(S_SHOP_TITLE), s_f24b, PBL_IF_ROUND_ELSE(GRect(54, 12, 90, 30), GRect(8, 2, 110, 30)),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
-  draw_gem_icon(ctx, (int16_t)(b.size.w - 54), 18);
+  draw_gem_icon(ctx, (int16_t)(b.size.w - 54 - PBL_IF_ROUND_ELSE(50, 0)), 18 + PBL_IF_ROUND_ELSE(10, 0));
   snprintf(buf, sizeof(buf), "%ld", (long)s_gems_total);
   graphics_context_set_text_color(ctx, head);
-  graphics_draw_text(ctx, buf, s_f18b, GRect(b.size.w - 46, 7, 44, 22),
+  graphics_draw_text(ctx, buf, s_f18b,
+                     GRect(b.size.w - 46 - PBL_IF_ROUND_ELSE(50, 0), 7 + PBL_IF_ROUND_ELSE(10, 0), 44, 22),
                      GTextOverflowModeTrailingEllipsis, GTextAlignmentLeft, NULL);
 
   const char *names[3] = {S(S_ITEM_GRIP), S(S_ITEM_JACKET), S(S_ITEM_ROPE)};
@@ -2216,8 +2230,8 @@ static void draw_shop(GContext *ctx, GRect b) {
   int8_t levels[3] = {s_grip, s_jacket, s_rope};
 
   for (int i = 0; i < 3; i++) {
-    int16_t y = (int16_t)(36 + i * 52);
-    GRect card = GRect(6, y, b.size.w - 12, 48);
+    int16_t y = (int16_t)(PBL_IF_ROUND_ELSE(50 + i * 50, 36 + i * 52));
+    GRect card = GRect(6 + RX, y, b.size.w - 12 - 2 * RX, 48);
     graphics_context_set_fill_color(ctx, i == s_shop_sel ? GColorCobaltBlue : GColorDukeBlue);
     graphics_fill_rect(ctx, card, 4, GCornersAll);
     if (i == s_shop_sel) {
@@ -2259,7 +2273,7 @@ static void draw_shop(GContext *ctx, GRect b) {
 
   bool all_max = s_grip >= MAX_LEVEL && s_jacket >= MAX_LEVEL && s_rope >= MAX_LEVEL;
   draw_center_text(ctx, all_max ? S(S_SUMMIT_NEAR) : S(S_SHOP_HINT), s_f14,
-                   b.size.h - 26, 20, b, all_max ? GColorCeleste : GColorLightGray);
+                   b.size.h - PBL_IF_ROUND_ELSE(56, 26), 20, b, all_max ? GColorCeleste : GColorLightGray);
 }
 
 static void layer_update(Layer *layer, GContext *ctx) {
